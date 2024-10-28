@@ -1,6 +1,6 @@
 # Gujarat Solar Power Analyzer
 
-![Solar Power](https://www.nasa.gov/sites/default/files/thumbnails/image/pia23499-1041.jpg)
+# WARNING, very WIP - code is public despite not being meant for public
 
 ## Table of Contents
 
