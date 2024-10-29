@@ -1,6 +1,6 @@
 # Raydium: Gujarat Solar Power Analyzer
 
-# WARNING, very WIP - code is public despite not being meant for public
+## WARNING, very WIP 
 
 
 
