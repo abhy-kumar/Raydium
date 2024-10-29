@@ -6,6 +6,8 @@
 
 ## Overview
 
+![img](https://iili.io/2C98dGI.png)
+
 **Raydium** is a Python-based application designed to:
 
 - **Fetch** solar and meteorological data for key cities in Gujarat from the NASA POWER API.
