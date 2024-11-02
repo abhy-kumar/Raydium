@@ -1,4 +1,4 @@
-name: Solar Potential Analysis
+name: Raydium
 
 on:
   workflow_dispatch:  # Allows manual triggering
@@ -28,7 +28,7 @@ jobs:
         curl -L -o data/india-soi.geojson https://raw.githubusercontent.com/datameet/maps/master/Country/india-composite.geojson
         
     - name: Run analysis
-      run: python solar_analysis/main.py
+      run: python solar_analysis/raydium.py
         
     - name: Upload results
       uses: actions/upload-artifact@v3
