@@ -8,29 +8,30 @@ on:
 jobs:
   solar_potential:
     runs-on: ubuntu-latest
+    timeout-minutes: 360  # Explicitly set to 6 hours to cover a long runtime
 
     steps:
-    - name: Checkout repository content
-      uses: actions/checkout@v2
+      - name: Checkout repository content
+        uses: actions/checkout@v3
 
-    - name: Set up Python 3.8
-      uses: actions/setup-python@v2
-      with:
-        python-version: '3.8'
+      - name: Set up Python 3.8
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.8'
     
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install geopandas folium pvlib requests beautifulsoup4
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install geopandas folium pvlib requests beautifulsoup4
 
-    - name: Run Solar Potential Script
-      run: |
-        python raydium.py
+      - name: Run Solar Potential Script
+        run: |
+          python raydium.py  # Make sure raydium.py saves files in the repo root
 
-    - name: Upload results
-      uses: actions/upload-artifact@v3
-      with:
-        name: results
-        path: |
-          india_solar_potential.html
-          india_solar_data.csv
+      - name: Upload results
+        uses: actions/upload-artifact@v3
+        with:
+          name: results
+          path: |
+            india_solar_potential.html
+            india_solar_data.csv
