@@ -70,16 +70,13 @@ def create_india_solar_map(geojson_path):
     """
     # Read India GeoJSON
     india = gpd.read_file(geojson_path)
-
-    # Print GeoJSON properties to inspect structure
-    print("GeoJSON properties available:", list(india.columns))
-
+    
     # Create a base map centered on India
     m = folium.Map(location=[20.5937, 78.9629], zoom_start=5)
 
     # Create a grid for sampling points
-    lat_range = np.arange(8.4, 37.6, 0.5)
-    lon_range = np.arange(68.7, 97.25, 0.5)
+    lat_range = np.arange(8.4, 37.6, 1.0)  # Using 1.0 degree step for faster processing
+    lon_range = np.arange(68.7, 97.25, 1.0)
 
     # Store solar potential data
     solar_data = []
@@ -96,9 +93,9 @@ def create_india_solar_map(geojson_path):
             point = gpd.points_from_xy([lon], [lat])[0]
 
             # Check if point is within India
-            if any(india.contains(point)):
+            if any(india.geometry.contains(point)):
                 power_data = fetch_nasa_power_data(lat, lon)
-                time.sleep(1)
+                time.sleep(2)  # Rate limiting
 
                 if power_data:
                     potential = calculate_solar_potential(power_data)
@@ -112,6 +109,9 @@ def create_india_solar_map(geojson_path):
     # Create DataFrame from collected data
     solar_df = pd.DataFrame(solar_data)
 
+    if solar_df.empty:
+        raise ValueError("No solar data could be collected. Please check API access and coordinates.")
+
     # Create a finer mesh grid for interpolation
     grid_lat = np.linspace(solar_df['latitude'].min(), solar_df['latitude'].max(), 200)
     grid_lon = np.linspace(solar_df['longitude'].min(), solar_df['longitude'].max(), 200)
@@ -122,38 +122,25 @@ def create_india_solar_map(geojson_path):
     values = solar_df['potential'].values
     grid_z = griddata(points, values, (grid_lon, grid_lat), method='cubic')
 
-    # Create contour data
-    contour_data = []
-    for i in range(len(grid_lat)):
-        for j in range(len(grid_lon)):
-            if not np.isnan(grid_z[i, j]):
-                point = gpd.points_from_xy([grid_lon[i, j]], [grid_lat[i, j]])[0]
-                if any(india.contains(point)):
-                    contour_data.append([
-                        grid_lat[i, j],
-                        grid_lon[i, j],
-                        grid_z[i, j]
-                    ])
+    # Add the heatmap layer
+    locations = [[lat, lon] for lat, lon in zip(solar_df['latitude'], solar_df['longitude'])]
+    values = solar_df['potential'].tolist()
 
-    # Convert to numpy array for easier manipulation
-    contour_array = np.array(contour_data)
-
-    # Get actual min and max values for India
-    min_val = np.min(contour_array[:, 2])
-    max_val = np.max(contour_array[:, 2])
-
-    # Modified Choropleth layer
-    choropleth = folium.Choropleth(
-        geo_data=india.__geo_interface__,  # Use the complete GeoJSON interface
-        data=solar_df,
-        columns=['latitude', 'potential'],
-        key_on='geometry',  # Changed from 'feature.properties.name'
-        fill_color='YlOrRd',
-        fill_opacity=0.7,
-        line_opacity=0.2,
-        legend_name='Solar Potential (kWh/m²/year)',
-        smooth_factor=0
-    ).add_to(m)
+    hm = plugins.HeatMap(
+        locations,
+        values,
+        min_opacity=0.4,
+        radius=25,
+        blur=15,
+        gradient={
+            0.4: '#ffffb2',
+            0.6: '#fecc5c',
+            0.7: '#fd8d3c',
+            0.8: '#f03b20',
+            1.0: '#bd0026'
+        }
+    )
+    hm.add_to(m)
 
     # Add GeoJSON boundary
     folium.GeoJson(
@@ -165,7 +152,7 @@ def create_india_solar_map(geojson_path):
         }
     ).add_to(m)
 
-    # Add detailed legend with actual values
+    # Add legend
     legend_html = f'''
         <div style="position: fixed;
                     bottom: 50px; right: 50px; width: 250px;
@@ -178,8 +165,11 @@ def create_india_solar_map(geojson_path):
     '''
 
     # Add color gradient and value ranges
+    min_val = min(values)
+    max_val = max(values)
     colors = ['#ffffb2', '#fecc5c', '#fd8d3c', '#f03b20', '#bd0026']
     step = (max_val - min_val) / len(colors)
+    
     for i, color in enumerate(colors):
         value = min_val + i * step
         legend_html += f'''
