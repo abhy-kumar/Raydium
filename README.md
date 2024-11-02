@@ -1,8 +1,6 @@
 # 🌞 Raydium - Solar Potential Analysis for India
 
-Welcome to **Raydium**, a project that brings together solar potential analysis and geographic visualization for India! Using NASA’s POWER API and powerful geospatial libraries, Raydium analyzes daily solar radiation data, processes it, and maps out potential energy generation across India. 🗺️⚡️
-
----
+Raydium aims to map India's solar potential. This program is still heavily WIP and contributions would be really appreciated. 
 
 ## 🌟 Features
 
