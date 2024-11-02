@@ -6,6 +6,9 @@ from folium import plugins
 import requests
 from scipy.interpolate import griddata
 import time
+import matplotlib.pyplot as plt
+from matplotlib.colors import ListedColormap
+import branca.colormap as bcm
 
 def fetch_nasa_power_data(lat, lon):
     """
@@ -88,7 +91,7 @@ def create_india_solar_map(geojson_path):
     for lat in lat_range:
         for lon in lon_range:
             current_point += 1
-            print(f"\nProcessing point {current_point}/{total_points}")
+            print(f"Processing point {current_point}/{total_points}")
 
             point = gpd.points_from_xy([lon], [lat])[0]
 
@@ -113,8 +116,8 @@ def create_india_solar_map(geojson_path):
         raise ValueError("No solar data could be collected. Please check API access and coordinates.")
 
     # Create a finer mesh grid for interpolation
-    grid_lat = np.linspace(solar_df['latitude'].min(), solar_df['latitude'].max(), 200)
-    grid_lon = np.linspace(solar_df['longitude'].min(), solar_df['longitude'].max(), 200)
+    grid_lat = np.linspace(solar_df['latitude'].min(), solar_df['latitude'].max(), 500)
+    grid_lon = np.linspace(solar_df['longitude'].min(), solar_df['longitude'].max(), 500)
     grid_lon, grid_lat = np.meshgrid(grid_lon, grid_lat)
 
     # Interpolate the data
@@ -122,16 +125,26 @@ def create_india_solar_map(geojson_path):
     values = solar_df['potential'].values
     grid_z = griddata(points, values, (grid_lon, grid_lat), method='cubic')
 
-    # Add the heatmap layer
+    # Mask points outside India using GeoPandas
+    grid_points = gpd.GeoDataFrame(geometry=gpd.points_from_xy(grid_lon.flatten(), grid_lat.flatten()))
+    grid_points['z'] = grid_z.flatten()
+    grid_points = grid_points.dropna(subset=['z'])
+    grid_points = grid_points[grid_points['z'] != -999]
+
+    # Optionally, you can clip the interpolated data to India's boundaries
+    grid_clip = gpd.clip(grid_points, india.unary_union)
+
+    # Add the heatmap layer (optional: you can remove this if you prefer only contours)
     locations = [[lat, lon] for lat, lon in zip(solar_df['latitude'], solar_df['longitude'])]
-    values = solar_df['potential'].tolist()
+    heatmap_values = solar_df['potential'].tolist()
 
     hm = plugins.HeatMap(
         locations,
-        values,
+        heatmap_values,
         min_opacity=0.4,
-        radius=25,
+        radius=15,
         blur=15,
+        max_zoom=7,
         gradient={
             0.4: '#ffffb2',
             0.6: '#fecc5c',
@@ -141,6 +154,31 @@ def create_india_solar_map(geojson_path):
         }
     )
     hm.add_to(m)
+
+    # Create a contour plot using matplotlib
+    fig, ax = plt.subplots(figsize=(8, 6))
+    contour = ax.contourf(grid_lon, grid_lat, grid_z, levels=15, cmap='viridis', alpha=0.6)
+
+    # Save the contour as a PNG image with transparent background
+    plt.axis('off')
+    contour_cb = fig.colorbar(contour, ax=ax, orientation='vertical', shrink=0.5)
+    plt.savefig('contour.png', bbox_inches='tight', pad_inches=0, transparent=True)
+    plt.close()
+
+    # Get the bounds of the grid
+    bounds = [grid_lat.min(), grid_lon.min(), grid_lat.max(), grid_lon.max()]
+
+    # Add the contour image as an overlay
+    img_path = 'contour.png'
+    folium.raster_layers.ImageOverlay(
+        name='Solar Potential Contours',
+        image=img_path,
+        bounds=[[bounds[0], bounds[1]], [bounds[2], bounds[3]]],
+        opacity=0.6,
+        interactive=True,
+        cross_origin=False,
+        zindex=1,
+    ).add_to(m)
 
     # Add GeoJSON boundary
     folium.GeoJson(
@@ -152,39 +190,16 @@ def create_india_solar_map(geojson_path):
         }
     ).add_to(m)
 
-    # Add legend
-    legend_html = f'''
-        <div style="position: fixed;
-                    bottom: 50px; right: 50px; width: 250px;
-                    border:2px solid grey; z-index:9999; font-size:14px;
-                    background-color:white;
-                    padding: 10px;
-                    border-radius: 5px;">
-        <p style="margin: 0 0 5px 0;"><strong>Solar Potential (kWh/m²/year)</strong></p>
-        <table style="width:100%; border-collapse: collapse;">
-    '''
+    # Add layer control
+    folium.LayerControl().add_to(m)
 
-    # Add color gradient and value ranges
-    min_val = min(values)
-    max_val = max(values)
-    colors = ['#ffffb2', '#fecc5c', '#fd8d3c', '#f03b20', '#bd0026']
-    step = (max_val - min_val) / len(colors)
-    
-    for i, color in enumerate(colors):
-        value = min_val + i * step
-        legend_html += f'''
-            <tr>
-                <td style="width:30px; background-color:{color}; height:20px;"></td>
-                <td style="padding-left:10px;">{value:.0f} - {value + step:.0f}</td>
-            </tr>
-        '''
+    # Add legend using branca
+    min_val = solar_df['potential'].min()
+    max_val = solar_df['potential'].max()
 
-    legend_html += '''
-        </table>
-        </div>
-    '''
-
-    m.get_root().html.add_child(folium.Element(legend_html))
+    colormap = bcm.linear.Viridis_09.scale(min_val, max_val)
+    colormap.caption = 'Solar Potential (kWh/m²/year)'
+    colormap.add_to(m)
 
     # Save the solar potential data
     solar_df.to_csv('india_solar_data.csv', index=False)
@@ -195,7 +210,7 @@ def main():
     """
     Main function to run the application
     """
-    geojson_path = 'india-soi.geojson'
+    geojson_path = 'india-soi.geojson'  # Ensure this path is correct and the file exists
 
     try:
         print("Creating India's solar potential map...")
