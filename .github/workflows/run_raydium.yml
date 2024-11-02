@@ -21,7 +21,7 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install numpy pandas geopandas folium requests scipy
+        pip install numpy pandas geopandas folium requests scipy branca
         
     - name: Run solar potential analysis
       run: |
