@@ -54,33 +54,30 @@ def create_india_solar_map(geojson_path):
     """
     Create an interactive map of India's solar potential with improved visualization
     """
-    # Read India GeoJSON
+    # Read India GeoJSON and simplify the geometry
     india = gpd.read_file(geojson_path)
+    india_simplified = india.geometry.simplify(0.1)  # Simplify geometry
     
     # Get India's bounds
-    bounds = india.total_bounds  # Returns (minx, miny, maxx, maxy)
+    bounds = india_simplified.total_bounds  # Returns (minx, miny, maxx, maxy)
     
     # Create base map centered on India
     m = folium.Map(location=[20.5937, 78.9629], zoom_start=5, 
                   tiles='CartoDB positron')
     
-    # Create a grid that matches India's bounds
-    # Add a small buffer (0.5 degrees) to ensure coverage
-    lat_range = np.arange(bounds[1]-0.5, bounds[3]+0.5, 2.0)
-    lon_range = np.arange(bounds[0]-0.5, bounds[2]+0.5, 2.0)
+    # Create a coarser grid (3-degree resolution)
+    lat_range = np.arange(bounds[1], bounds[3], 3.0)
+    lon_range = np.arange(bounds[0], bounds[2], 3.0)
     
     solar_data = []
-    
-    # Create a polygon for quick containment checks
-    india_polygon = india.unary_union
     
     # Fetch data for grid points
     for lat in lat_range:
         for lon in lon_range:
             point = gpd.points_from_xy([lon], [lat])[0]
             
-            # Check if point is within or very close to India's boundary
-            if india_polygon.buffer(0.1).contains(point):
+            # Simple contains check with simplified geometry
+            if any(india_simplified.contains(point)):
                 power_data = fetch_nasa_power_data(lat, lon)
                 potential = calculate_solar_potential(power_data)
                 
@@ -98,10 +95,10 @@ def create_india_solar_map(geojson_path):
     if solar_df.empty:
         raise ValueError("No solar data collected")
     
-    # Create a finer grid for interpolation that matches India's shape
-    grid_size = 100  # Increased for better resolution
-    grid_lat = np.linspace(bounds[1]-0.5, bounds[3]+0.5, grid_size)
-    grid_lon = np.linspace(bounds[0]-0.5, bounds[2]+0.5, grid_size)
+    # Create interpolation grid
+    grid_size = 50  # Reduced grid size
+    grid_lat = np.linspace(bounds[1], bounds[3], grid_size)
+    grid_lon = np.linspace(bounds[0], bounds[2], grid_size)
     grid_lon, grid_lat = np.meshgrid(grid_lon, grid_lat)
     
     # Interpolate using cubic method
@@ -109,12 +106,12 @@ def create_india_solar_map(geojson_path):
     values = solar_df['potential'].values
     grid_z = griddata(points, values, (grid_lon, grid_lat), method='cubic')
     
-    # Mask points outside India
+    # Mask points outside India using simplified geometry
     mask = np.zeros_like(grid_z, dtype=bool)
     for i in range(grid_size):
         for j in range(grid_size):
             point = gpd.points_from_xy([grid_lon[i,j]], [grid_lat[i,j]])[0]
-            mask[i,j] = india_polygon.buffer(0.1).contains(point)
+            mask[i,j] = any(india_simplified.contains(point))
     
     grid_z[~mask] = np.nan
     
@@ -133,24 +130,26 @@ def create_india_solar_map(geojson_path):
     
     # Create the interpolated raster layer
     img_array = np.zeros((grid_size, grid_size, 4), dtype=np.uint8)
-    norm_z = (grid_z - np.nanmin(grid_z)) / (np.nanmax(grid_z) - np.nanmin(grid_z))
-    
-    # Convert interpolated values to RGBA
-    for i in range(grid_size):
-        for j in range(grid_size):
-            if not np.isnan(norm_z[i, j]):
-                # Get color index
-                idx = int(norm_z[i, j] * (len(colors) - 1))
-                color = colors[idx]
-                # Convert hex to RGB
-                r = int(color[1:3], 16)
-                g = int(color[3:5], 16)
-                b = int(color[5:7], 16)
-                img_array[i, j] = [r, g, b, 180]  # Semi-transparent
+    valid_values = grid_z[~np.isnan(grid_z)]
+    if len(valid_values) > 0:
+        norm_z = (grid_z - np.nanmin(valid_values)) / (np.nanmax(valid_values) - np.nanmin(valid_values))
+        
+        # Convert interpolated values to RGBA
+        for i in range(grid_size):
+            for j in range(grid_size):
+                if not np.isnan(norm_z[i, j]):
+                    # Get color index
+                    idx = int(norm_z[i, j] * (len(colors) - 1))
+                    color = colors[idx]
+                    # Convert hex to RGB
+                    r = int(color[1:3], 16)
+                    g = int(color[3:5], 16)
+                    b = int(color[5:7], 16)
+                    img_array[i, j] = [r, g, b, 180]  # Semi-transparent
     
     # Add the interpolated layer using India's bounds
-    image_bounds = [[bounds[1]-0.5, bounds[0]-0.5],
-                   [bounds[3]+0.5, bounds[2]+0.5]]
+    image_bounds = [[bounds[1], bounds[0]],
+                   [bounds[3], bounds[2]]]
     
     folium.raster_layers.ImageOverlay(
         img_array,
@@ -174,8 +173,8 @@ def create_india_solar_map(geojson_path):
     # Add colormap legend
     colormap = cm.LinearColormap(
         colors=colors,
-        vmin=np.nanmin(grid_z[~np.isnan(grid_z)]),  # Only use valid values
-        vmax=np.nanmax(grid_z[~np.isnan(grid_z)])
+        vmin=np.nanmin(valid_values),
+        vmax=np.nanmax(valid_values)
     )
     colormap.add_to(m)
     colormap.caption = 'Solar Potential (kWh/m²/year)'
