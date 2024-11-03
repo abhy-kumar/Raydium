@@ -3,6 +3,7 @@ import pandas as pd
 import geopandas as gpd
 import folium
 import requests
+from shapely.geometry import Point
 from scipy.interpolate import griddata
 import time
 import branca.colormap as cm
@@ -50,9 +51,6 @@ def calculate_solar_potential(power_data, panel_efficiency=0.2):
         return None
 
 def create_india_solar_map(geojson_path='india-soi.geojson'):
-    """
-    Create an interactive map of India's solar potential using provided GeoJSON file
-    """
     # Read India GeoJSON
     print(f"Reading GeoJSON file from: {geojson_path}")
     india = gpd.read_file(geojson_path)
@@ -60,8 +58,11 @@ def create_india_solar_map(geojson_path='india-soi.geojson'):
     # Simplify the geometry for better performance
     india_simplified = india.geometry.simplify(0.1)
     
+    # Combine all geometries into a single geometry
+    india_union = india_simplified.unary_union
+    
     # Get India's bounds
-    bounds = india_simplified.total_bounds
+    bounds = india_union.bounds  # (minx, miny, maxx, maxy)
     print(f"Map bounds: {bounds}")
     
     # Create base map centered on India
@@ -80,11 +81,10 @@ def create_india_solar_map(geojson_path='india-soi.geojson'):
     # Fetch data for grid points within India's boundary
     for lat in lat_range:
         for lon in lon_range:
-            point = gpd.points_from_xy([lon], [lat])[0]
+            point = Point(lon, lat)
             
             # Check if the point lies within India's boundary
-            # Fixed: Using contains().any() for proper array handling
-            if india_simplified.contains(point).any():
+            if india_union.contains(point):
                 processed_points += 1
                 print(f"Processing point {processed_points}/{total_points} at lat={lat:.2f}, lon={lon:.2f}")
                 
@@ -117,14 +117,14 @@ def create_india_solar_map(geojson_path='india-soi.geojson'):
     values = solar_df['potential'].values
     grid_z = griddata(points, values, (grid_lon, grid_lat), method='linear')
     
-    # Mask points outside India - Fixed array handling
+    # Create GeoDataFrame for grid points
     grid_points = gpd.GeoDataFrame(
         geometry=gpd.points_from_xy(grid_lon.flatten(), grid_lat.flatten()),
         crs=india.crs
     )
     
-    # Fixed: Using contains().any() for proper array handling
-    mask = np.array([india_simplified.contains(point).any() for point in grid_points.geometry])
+    # Create mask using the unified geometry
+    mask = np.array([india_union.contains(point) for point in grid_points.geometry])
     mask = mask.reshape(grid_z.shape)
     grid_z[~mask] = np.nan
     
@@ -132,17 +132,18 @@ def create_india_solar_map(geojson_path='india-soi.geojson'):
     # Define colormap for solar potential with new color scheme
     colormap = cm.LinearColormap(
         colors=['#1a237e',  # Dark blue (lowest)
-               '#4fc3f7',   # Light blue
-               '#81c784',   # Light green
-               '#2e7d32',   # Medium green
-               '#1b5e20'],  # Dark green (highest)
+                '#4fc3f7',   # Light blue
+                '#81c784',   # Light green
+                '#2e7d32',   # Medium green
+                '#1b5e20'],  # Dark green (highest)
         vmin=np.nanmin(values),
         vmax=np.nanmax(values)
     )
     
-    # Add the interpolated layer to the map
+    # Apply colormap
     img = colormap(grid_z)
     image_bounds = [[bounds[1], bounds[0]], [bounds[3], bounds[2]]]
+    
     folium.raster_layers.ImageOverlay(
         image=img,
         bounds=image_bounds,
