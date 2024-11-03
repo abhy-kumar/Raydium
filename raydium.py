@@ -68,7 +68,7 @@ def calculate_solar_potential(power_data, panel_efficiency=0.2):
 
 def create_india_solar_map(geojson_path):
     """
-    Create an interactive map of India's solar potential with interpolated contours
+    Create an interactive map of India's solar potential with optimized rendering
     """
     # Read India GeoJSON
     india = gpd.read_file(geojson_path)
@@ -76,9 +76,9 @@ def create_india_solar_map(geojson_path):
     # Create a base map centered on India
     m = folium.Map(location=[20.5937, 78.9629], zoom_start=5)
     
-    # Create a finer grid for sampling points (0.5-degree resolution)
-    lat_range = np.arange(8.4, 37.6, 0.5)
-    lon_range = np.arange(68.7, 97.25, 0.5)
+    # Create a coarser grid for sampling points (1-degree resolution)
+    lat_range = np.arange(8.4, 37.6, 1.0)  # Increased step size
+    lon_range = np.arange(68.7, 97.25, 1.0)  # Increased step size
     
     # Store solar potential data
     solar_data = []
@@ -114,12 +114,12 @@ def create_india_solar_map(geojson_path):
     if solar_df.empty:
         raise ValueError("No solar data could be collected. Please check API access and coordinates.")
     
-    # Create a much finer mesh grid for smooth interpolation
-    grid_lat = np.linspace(solar_df['latitude'].min(), solar_df['latitude'].max(), 500)
-    grid_lon = np.linspace(solar_df['longitude'].min(), solar_df['longitude'].max(), 500)
+    # Create a moderately sized grid for interpolation (reduced from 500x500)
+    grid_lat = np.linspace(solar_df['latitude'].min(), solar_df['latitude'].max(), 100)  # Reduced points
+    grid_lon = np.linspace(solar_df['longitude'].min(), solar_df['longitude'].max(), 100)  # Reduced points
     grid_lon, grid_lat = np.meshgrid(grid_lon, grid_lat)
     
-    # Interpolate the data using cubic interpolation
+    # Interpolate the data
     points = solar_df[['longitude', 'latitude']].values
     values = solar_df['potential'].values
     grid_z = griddata(points, values, (grid_lon, grid_lat), method='cubic')
@@ -132,42 +132,16 @@ def create_india_solar_map(geojson_path):
         vmax=np.nanmax(grid_z)
     )
     
-    # Create GeoJSON features for the interpolated grid
-    features = []
-    for i in range(len(grid_lat)-1):
-        for j in range(len(grid_lon)-1):
-            if not np.isnan(grid_z[i, j]):
-                polygon = {
-                    "type": "Feature",
-                    "properties": {
-                        "potential": float(grid_z[i, j])
-                    },
-                    "geometry": {
-                        "type": "Polygon",
-                        "coordinates": [[
-                            [float(grid_lon[i, j]), float(grid_lat[i, j])],
-                            [float(grid_lon[i, j+1]), float(grid_lat[i, j+1])],
-                            [float(grid_lon[i+1, j+1]), float(grid_lat[i+1, j+1])],
-                            [float(grid_lon[i+1, j]), float(grid_lat[i+1, j])],
-                            [float(grid_lon[i, j]), float(grid_lat[i, j])]
-                        ]]
-                    }
-                }
-                features.append(polygon)
+    # Instead of creating individual polygons, use folium.raster_layers
+    # Convert the grid data to image format
+    img = [(grid_lat[0][0], grid_lon[0][0], grid_lat[-1][-1], grid_lon[-1][-1])]
     
-    geojson_data = {
-        "type": "FeatureCollection",
-        "features": features
-    }
-    
-    # Add the interpolated layer
-    folium.GeoJson(
-        geojson_data,
-        style_function=lambda x: {
-            'fillColor': colormap(x['properties']['potential']),
-            'color': 'none',
-            'fillOpacity': 0.7
-        },
+    # Add the interpolated layer using ImageOverlay
+    folium.raster_layers.ImageOverlay(
+        grid_z,
+        bounds=img[0],
+        colormap=lambda x: colormap(x),
+        opacity=0.7,
         name='Solar Potential'
     ).add_to(m)
     
@@ -178,7 +152,8 @@ def create_india_solar_map(geojson_path):
             'fillColor': 'none',
             'color': 'black',
             'weight': 1.5
-        }
+        },
+        name='India Boundary'
     ).add_to(m)
     
     # Add colormap to the map
