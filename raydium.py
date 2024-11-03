@@ -117,16 +117,14 @@ def create_india_solar_map(geojson_path='india-soi.geojson'):
     values = solar_df['potential'].values
     grid_z = griddata(points, values, (grid_lon, grid_lat), method='linear')
     
-    # Create GeoDataFrame for grid points
-    grid_points = gpd.GeoDataFrame(
-        geometry=gpd.points_from_xy(grid_lon.flatten(), grid_lat.flatten()),
-        crs=india.crs
-    )
-    
-    # Create mask using the unified geometry
-    mask = np.array([india_union.contains(point) for point in grid_points.geometry])
+    # Create mask for points within India's boundary
+    print("Creating mask for India's boundary...")
+    points_list = [Point(lon, lat) for lon, lat in zip(grid_lon.flatten(), grid_lat.flatten())]
+    mask = np.array([india_union.contains(point) for point in points_list], dtype=bool)
     mask = mask.reshape(grid_z.shape)
-    grid_z[~mask] = np.nan
+    
+    # Apply mask to grid
+    grid_z = np.where(mask, grid_z, np.nan)
     
     print("Creating visualization...")
     # Define colormap for solar potential with new color scheme
