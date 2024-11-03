@@ -83,7 +83,8 @@ def create_india_solar_map(geojson_path='india-composite.geojson'):
             point = gpd.points_from_xy([lon], [lat])[0]
             
             # Check if the point lies within India's boundary
-            if any(india_simplified.contains(point)):
+            # Fixed: Using contains().any() for proper array handling
+            if india_simplified.contains(point).any():
                 processed_points += 1
                 print(f"Processing point {processed_points}/{total_points} at lat={lat:.2f}, lon={lon:.2f}")
                 
@@ -116,14 +117,15 @@ def create_india_solar_map(geojson_path='india-composite.geojson'):
     values = solar_df['potential'].values
     grid_z = griddata(points, values, (grid_lon, grid_lat), method='linear')
     
-    # Mask points outside India
-    mask = np.zeros_like(grid_z, dtype=bool)
+    # Mask points outside India - Fixed array handling
     grid_points = gpd.GeoDataFrame(
         geometry=gpd.points_from_xy(grid_lon.flatten(), grid_lat.flatten()),
         crs=india.crs
     )
-    mask_points = grid_points.geometry.apply(lambda pt: any(india_simplified.contains(pt))).values
-    mask = mask_points.reshape(grid_z.shape)
+    
+    # Fixed: Using contains().any() for proper array handling
+    mask = np.array([india_simplified.contains(point).any() for point in grid_points.geometry])
+    mask = mask.reshape(grid_z.shape)
     grid_z[~mask] = np.nan
     
     print("Creating visualization...")
@@ -139,7 +141,7 @@ def create_india_solar_map(geojson_path='india-composite.geojson'):
     )
     
     # Add the interpolated layer to the map
-    img = colormap(grid_z)  # Removed alpha parameter
+    img = colormap(grid_z)
     image_bounds = [[bounds[1], bounds[0]], [bounds[3], bounds[2]]]
     folium.raster_layers.ImageOverlay(
         image=img,
