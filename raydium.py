@@ -49,7 +49,7 @@ def calculate_solar_potential(power_data, panel_efficiency=0.2):
     except:
         return None
 
-def create_india_solar_map(geojson_path='india-composite.geojson'):
+def create_india_solar_map(geojson_path='india-soi.geojson'):
     """
     Create an interactive map of India's solar potential using provided GeoJSON file
     """
