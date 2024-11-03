@@ -132,4 +132,4 @@ Both files are accessible as artifacts in GitHub Actions and are downloadable fo
 
 ## 📋 Credits
 
-Special thanks to [DataMeet](https://github.com/datameet/maps/blob/master/Country/india-soi.geojson) for the GeoJSON boundary file of India.
+Special thanks to [DataMeet](https://github.com/datameet/maps/blob/master/Country/india-soi.geojson) for the GeoJSON boundary file of India and to [NASA POWER API](https://power.larc.nasa.gov/docs/services/api/) for the data required to calculate the solar potential.
