@@ -57,23 +57,30 @@ def create_india_solar_map(geojson_path):
     # Read India GeoJSON
     india = gpd.read_file(geojson_path)
     
-    # Create base map
+    # Get India's bounds
+    bounds = india.total_bounds  # Returns (minx, miny, maxx, maxy)
+    
+    # Create base map centered on India
     m = folium.Map(location=[20.5937, 78.9629], zoom_start=5, 
                   tiles='CartoDB positron')
     
-    # Create a coarser grid for initial sampling (2-degree resolution)
-    lat_range = np.arange(8.4, 37.6, 2.0)
-    lon_range = np.arange(68.7, 97.25, 2.0)
+    # Create a grid that matches India's bounds
+    # Add a small buffer (0.5 degrees) to ensure coverage
+    lat_range = np.arange(bounds[1]-0.5, bounds[3]+0.5, 2.0)
+    lon_range = np.arange(bounds[0]-0.5, bounds[2]+0.5, 2.0)
     
     solar_data = []
-    total_points = len(lat_range) * len(lon_range)
+    
+    # Create a polygon for quick containment checks
+    india_polygon = india.unary_union
     
     # Fetch data for grid points
-    for i, lat in enumerate(lat_range):
+    for lat in lat_range:
         for lon in lon_range:
             point = gpd.points_from_xy([lon], [lat])[0]
             
-            if any(india.geometry.contains(point)):
+            # Check if point is within or very close to India's boundary
+            if india_polygon.buffer(0.1).contains(point):
                 power_data = fetch_nasa_power_data(lat, lon)
                 potential = calculate_solar_potential(power_data)
                 
@@ -91,16 +98,25 @@ def create_india_solar_map(geojson_path):
     if solar_df.empty:
         raise ValueError("No solar data collected")
     
-    # Create a finer grid for smooth interpolation
-    grid_size = 80  # Reduced from previous version
-    grid_lat = np.linspace(solar_df['latitude'].min(), solar_df['latitude'].max(), grid_size)
-    grid_lon = np.linspace(solar_df['longitude'].min(), solar_df['longitude'].max(), grid_size)
+    # Create a finer grid for interpolation that matches India's shape
+    grid_size = 100  # Increased for better resolution
+    grid_lat = np.linspace(bounds[1]-0.5, bounds[3]+0.5, grid_size)
+    grid_lon = np.linspace(bounds[0]-0.5, bounds[2]+0.5, grid_size)
     grid_lon, grid_lat = np.meshgrid(grid_lon, grid_lat)
     
-    # Interpolate using cubic method for smoothness
+    # Interpolate using cubic method
     points = solar_df[['longitude', 'latitude']].values
     values = solar_df['potential'].values
     grid_z = griddata(points, values, (grid_lon, grid_lat), method='cubic')
+    
+    # Mask points outside India
+    mask = np.zeros_like(grid_z, dtype=bool)
+    for i in range(grid_size):
+        for j in range(grid_size):
+            point = gpd.points_from_xy([grid_lon[i,j]], [grid_lat[i,j]])[0]
+            mask[i,j] = india_polygon.buffer(0.1).contains(point)
+    
+    grid_z[~mask] = np.nan
     
     # Create a more distinguishable colormap
     colors = [
@@ -132,9 +148,9 @@ def create_india_solar_map(geojson_path):
                 b = int(color[5:7], 16)
                 img_array[i, j] = [r, g, b, 180]  # Semi-transparent
     
-    # Add the interpolated layer
-    image_bounds = [[solar_df['latitude'].min(), solar_df['longitude'].min()],
-                   [solar_df['latitude'].max(), solar_df['longitude'].max()]]
+    # Add the interpolated layer using India's bounds
+    image_bounds = [[bounds[1]-0.5, bounds[0]-0.5],
+                   [bounds[3]+0.5, bounds[2]+0.5]]
     
     folium.raster_layers.ImageOverlay(
         img_array,
@@ -158,8 +174,8 @@ def create_india_solar_map(geojson_path):
     # Add colormap legend
     colormap = cm.LinearColormap(
         colors=colors,
-        vmin=np.nanmin(grid_z),
-        vmax=np.nanmax(grid_z)
+        vmin=np.nanmin(grid_z[~np.isnan(grid_z)]),  # Only use valid values
+        vmax=np.nanmax(grid_z[~np.isnan(grid_z)])
     )
     colormap.add_to(m)
     colormap.caption = 'Solar Potential (kWh/m²/year)'
