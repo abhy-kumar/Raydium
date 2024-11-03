@@ -9,8 +9,6 @@ Raydium aims to map India's solar potential. This program is still heavily WIP a
 - **High-Resolution Interpolation**: Uses grid sampling for a detailed solar potential map 🗺️
 - **Automated with GitHub Actions**: Automatically runs daily or on-demand in GitHub Actions 🕒
 
----
-
 ## 🛠️ Setup
 
 ### Prerequisites
@@ -46,8 +44,6 @@ pip install geopandas folium pvlib requests beautifulsoup4
    ```
 
    - This will generate `india_solar_potential.html` (an interactive map) and `india_solar_data.csv` (raw data) in your project directory.
-
----
 
 ## 🌐 GitHub Actions Workflow
 
@@ -114,16 +110,12 @@ jobs:
 
 ```
 
----
-
 ## 📊 Output
 
 - **india_solar_potential.html**: Interactive map showcasing solar potential across India.
 - **india_solar_data.csv**: Raw solar potential data for each grid point sampled.
 
 Both files are accessible as artifacts in GitHub Actions and are downloadable for further analysis.
-
----
 
 ## 📂 File Structure
 
@@ -138,12 +130,6 @@ Both files are accessible as artifacts in GitHub Actions and are downloadable fo
 └── requirements.txt            # Dependencies for local setup
 ```
 
----
-
 ## 📋 Credits
 
 Special thanks to [DataMeet](https://github.com/datameet/maps/blob/master/Country/india-soi.geojson) for the GeoJSON boundary file of India.
-
----
-
-🎉 **Enjoy mapping out India’s solar potential!**
