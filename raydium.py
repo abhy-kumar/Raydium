@@ -27,7 +27,7 @@ def fetch_nasa_power_data(lat, lon):
         response.raise_for_status()
         return response.json()
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"Error fetching data for lat={lat}, lon={lon}: {e}")
         return None
 
 def calculate_solar_potential(power_data, panel_efficiency=0.2):
@@ -49,25 +49,33 @@ def calculate_solar_potential(power_data, panel_efficiency=0.2):
     except:
         return None
 
-def create_india_solar_map(geojson_path):
+def create_india_solar_map(geojson_path='india-composite.geojson'):
     """
-    Create an interactive map of India's solar potential with optimized visualization and performance
+    Create an interactive map of India's solar potential using provided GeoJSON file
     """
-    # Read India GeoJSON and simplify the geometry
+    # Read India GeoJSON
+    print(f"Reading GeoJSON file from: {geojson_path}")
     india = gpd.read_file(geojson_path)
+    
+    # Simplify the geometry for better performance
     india_simplified = india.geometry.simplify(0.1)
     
     # Get India's bounds
     bounds = india_simplified.total_bounds
+    print(f"Map bounds: {bounds}")
     
     # Create base map centered on India
     m = folium.Map(location=[20.5937, 78.9629], zoom_start=5, tiles='CartoDB positron')
     
-    # Create a grid with a 1.5-degree resolution
-    lat_range = np.arange(bounds[1], bounds[3], 1.5)
-    lon_range = np.arange(bounds[0], bounds[2], 1.5)
+    # Create a grid with a 2-degree resolution (can be adjusted)
+    lat_range = np.arange(bounds[1], bounds[3], 2)
+    lon_range = np.arange(bounds[0], bounds[2], 2)
     
     solar_data = []
+    total_points = len(lat_range) * len(lon_range)
+    processed_points = 0
+    
+    print(f"Starting data collection for {total_points} potential grid points...")
     
     # Fetch data for grid points within India's boundary
     for lat in lat_range:
@@ -76,6 +84,9 @@ def create_india_solar_map(geojson_path):
             
             # Check if the point lies within India's boundary
             if any(india_simplified.contains(point)):
+                processed_points += 1
+                print(f"Processing point {processed_points}/{total_points} at lat={lat:.2f}, lon={lon:.2f}")
+                
                 power_data = fetch_nasa_power_data(lat, lon)
                 potential = calculate_solar_potential(power_data)
                 
@@ -93,8 +104,9 @@ def create_india_solar_map(geojson_path):
     if solar_df.empty:
         raise ValueError("No solar data collected")
     
+    print("Creating interpolation grid...")
     # Create interpolation grid
-    grid_size = 100  # Finer grid for better detail
+    grid_size = 100  # Finer grid for better visualization
     grid_lat = np.linspace(bounds[1], bounds[3], grid_size)
     grid_lon = np.linspace(bounds[0], bounds[2], grid_size)
     grid_lon, grid_lat = np.meshgrid(grid_lon, grid_lat)
@@ -104,24 +116,27 @@ def create_india_solar_map(geojson_path):
     values = solar_df['potential'].values
     grid_z = griddata(points, values, (grid_lon, grid_lat), method='linear')
     
-    # Mask points outside India using simplified geometry
+    # Mask points outside India
     mask = np.zeros_like(grid_z, dtype=bool)
-    grid_points = gpd.GeoDataFrame(geometry=gpd.points_from_xy(grid_lon.flatten(), grid_lat.flatten()))
+    grid_points = gpd.GeoDataFrame(
+        geometry=gpd.points_from_xy(grid_lon.flatten(), grid_lat.flatten()),
+        crs=india.crs
+    )
     mask_points = grid_points.geometry.apply(lambda pt: any(india_simplified.contains(pt))).values
     mask = mask_points.reshape(grid_z.shape)
     grid_z[~mask] = np.nan
     
+    print("Creating visualization...")
     # Define colormap for solar potential
     colormap = cm.LinearColormap(
-        colors=['#313695', '#4575b4', '#74add1', '#abd9e9', '#fee090', '#fdae61', '#f46d43', '#d73027', '#a50026'],
+        colors=['#313695', '#4575b4', '#74add1', '#abd9e9', '#fee090', 
+                '#fdae61', '#f46d43', '#d73027', '#a50026'],
         vmin=np.nanmin(values),
         vmax=np.nanmax(values)
     )
     
-    # Convert the interpolated layer to RGBA using colormap
-    img_array = colormap(grid_z, alpha=0.8)
-    
     # Add the interpolated layer to the map
+    img_array = colormap(grid_z, alpha=0.8)
     image_bounds = [[bounds[1], bounds[0]], [bounds[3], bounds[2]]]
     folium.raster_layers.ImageOverlay(
         image=img_array,
@@ -150,7 +165,14 @@ def create_india_solar_map(geojson_path):
     folium.LayerControl().add_to(m)
     
     # Save data
-    solar_df.to_csv('india_solar_data.csv', index=False)
+    output_csv = 'india_solar_data.csv'
+    output_html = 'india_solar_potential.html'
+    
+    print(f"Saving data to {output_csv}")
+    solar_df.to_csv(output_csv, index=False)
+    
+    print(f"Saving map to {output_html}")
+    m.save(output_html)
     
     return m, solar_df
 
@@ -158,13 +180,11 @@ def main():
     """
     Main function to run the application
     """
-    geojson_path = '/mnt/data/image.png'
-    
     try:
-        print("Creating India's solar potential map...")
-        solar_map, solar_data = create_india_solar_map(geojson_path)
-        solar_map.save('india_solar_potential.html')
-        print("\nMap has been generated and saved as 'india_solar_potential.html'")
+        print("Starting solar potential map generation...")
+        solar_map, solar_data = create_india_solar_map()
+        print("\nProcess completed successfully!")
+        print("Map has been saved as 'india_solar_potential.html'")
         print("Raw data has been saved as 'india_solar_data.csv'")
         
     except Exception as e:
