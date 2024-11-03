@@ -2,7 +2,7 @@ name: Generate Solar Potential Data
 
 on:
   schedule:
-    - cron: '0 0 1 * *'  # Run monthly on the 1st
+    - cron: '0 0 * * *'  # Run daily at midnight (00:00)
   workflow_dispatch:  # Allow manual trigger
 
 jobs:

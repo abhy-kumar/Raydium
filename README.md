@@ -62,42 +62,56 @@ To automate the solar analysis daily or on-demand, Raydium uses GitHub Actions! 
 #### 📝 Workflow Overview
 
 ```yaml
-name: Run Raydium
+name: Generate Solar Potential Data
 
 on:
-  workflow_dispatch:  # Manual trigger
   schedule:
-    - cron: '0 0 * * *'  # Runs daily at midnight UTC
+    - cron: '0 0 * * *'  # Run daily at midnight (00:00)
+  workflow_dispatch:  # Allow manual trigger
 
 jobs:
-  solar_potential:
+  generate-solar-data:
     runs-on: ubuntu-latest
-
+    
     steps:
-      - name: Checkout repository content
-        uses: actions/checkout@v2
+    - name: Checkout repository
+      uses: actions/checkout@v3
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install numpy pandas geopandas folium requests scipy branca
+        
+    - name: Run solar potential analysis
+      run: |
+        python raydium.py
+      env:
+        PYTHONUNBUFFERED: 1
+        
+    - name: Check if files were generated
+      run: |
+        if [ ! -f india_solar_potential.html ] || [ ! -f india_solar_data.csv ]; then
+          echo "Error: Required files were not generated"
+          exit 1
+        fi
+        
+    - name: Configure Git
+      run: |
+        git config --local user.email "github-actions[bot]@users.noreply.github.com"
+        git config --local user.name "github-actions[bot]"
+        
+    - name: Commit and push if there are changes
+      run: |
+        git add india_solar_potential.html india_solar_data.csv
+        git diff --staged --quiet || (git commit -m "Update solar potential data [skip ci]" && git push)
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Set up Python 3.8
-        uses: actions/setup-python@v2
-        with:
-          python-version: '3.8'
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install geopandas folium pvlib requests beautifulsoup4
-
-      - name: Run Solar Potential Script
-        run: |
-          python raydium.py
-
-      - name: Upload results
-        uses: actions/upload-artifact@v3
-        with:
-          name: results
-          path: |
-            india_solar_potential.html
-            india_solar_data.csv
 ```
 
 ---
