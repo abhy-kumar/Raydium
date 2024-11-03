@@ -125,23 +125,37 @@ def create_india_solar_map(geojson_path):
     grid_z = griddata(points, values, (grid_lon, grid_lat), method='cubic')
     
     # Create custom colormap
+    min_val = np.nanmin(grid_z)
+    max_val = np.nanmax(grid_z)
+    step = (max_val - min_val) / 4  # 5 colors = 4 steps
+    
     colors = ['#ffffb2', '#fecc5c', '#fd8d3c', '#f03b20', '#bd0026']
     colormap = cm.LinearColormap(
         colors=colors,
-        vmin=np.nanmin(grid_z),
-        vmax=np.nanmax(grid_z)
+        vmin=min_val,
+        vmax=max_val
     )
     
-    # Instead of creating individual polygons, use folium.raster_layers
-    # Convert the grid data to image format
-    img = [(grid_lat[0][0], grid_lon[0][0], grid_lat[-1][-1], grid_lon[-1][-1])]
+    # Create a heatmap layer instead of ImageOverlay
+    heat_data = []
+    for i in range(len(grid_lat)):
+        for j in range(len(grid_lon)):
+            if not np.isnan(grid_z[i, j]):
+                heat_data.append([
+                    float(grid_lat[i, j]),
+                    float(grid_lon[i, j]),
+                    float(grid_z[i, j])
+                ])
     
-    # Add the interpolated layer using ImageOverlay
-    folium.raster_layers.ImageOverlay(
-        grid_z,
-        bounds=img[0],
-        colormap=lambda x: colormap(x),
-        opacity=0.7,
+    # Add heatmap layer
+    plugins.HeatMap(
+        heat_data,
+        min_opacity=0.5,
+        max_zoom=4,
+        radius=25,
+        blur=15,
+        max_val=max_val,
+        gradient={0.4: '#ffffb2', 0.6: '#fecc5c', 0.7: '#fd8d3c', 0.8: '#f03b20', 1: '#bd0026'},
         name='Solar Potential'
     ).add_to(m)
     
