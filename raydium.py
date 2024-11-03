@@ -3,7 +3,7 @@ import pandas as pd
 import geopandas as gpd
 import folium
 import requests
-from shapely.geometry import Point
+from shapely.geometry import Point, Polygon
 from scipy.interpolate import griddata
 import time
 import branca.colormap as cm
@@ -50,6 +50,15 @@ def calculate_solar_potential(power_data, panel_efficiency=0.2):
     except:
         return None
 
+def is_point_in_india(point, india_union):
+    """
+    Helper function to check if a point is within India's boundary
+    """
+    try:
+        return india_union.contains(Point(point[0], point[1]))
+    except:
+        return False
+
 def create_india_solar_map(geojson_path='india-soi.geojson'):
     # Read India GeoJSON
     print(f"Reading GeoJSON file from: {geojson_path}")
@@ -83,22 +92,26 @@ def create_india_solar_map(geojson_path='india-soi.geojson'):
         for lon in lon_range:
             point = Point(lon, lat)
             
-            # Check if the point lies within India's boundary
-            if india_union.contains(point):
-                processed_points += 1
-                print(f"Processing point {processed_points}/{total_points} at lat={lat:.2f}, lon={lon:.2f}")
-                
-                power_data = fetch_nasa_power_data(lat, lon)
-                potential = calculate_solar_potential(power_data)
-                
-                if potential is not None:
-                    solar_data.append({
-                        'latitude': lat,
-                        'longitude': lon,
-                        'potential': potential
-                    })
-                
-                time.sleep(0.5)  # Slight delay to avoid hitting rate limits
+            try:
+                # Check if the point lies within India's boundary
+                if india_union.contains(point):
+                    processed_points += 1
+                    print(f"Processing point {processed_points}/{total_points} at lat={lat:.2f}, lon={lon:.2f}")
+                    
+                    power_data = fetch_nasa_power_data(lat, lon)
+                    potential = calculate_solar_potential(power_data)
+                    
+                    if potential is not None:
+                        solar_data.append({
+                            'latitude': lat,
+                            'longitude': lon,
+                            'potential': potential
+                        })
+                    
+                    time.sleep(0.5)  # Slight delay to avoid hitting rate limits
+            except Exception as e:
+                print(f"Error processing point at lat={lat}, lon={lon}: {e}")
+                continue
     
     solar_df = pd.DataFrame(solar_data)
     
@@ -117,14 +130,22 @@ def create_india_solar_map(geojson_path='india-soi.geojson'):
     values = solar_df['potential'].values
     grid_z = griddata(points, values, (grid_lon, grid_lat), method='linear')
     
+    # Initialize mask array
+    mask = np.zeros(grid_z.shape, dtype=bool)
+    
     # Create mask for points within India's boundary
     print("Creating mask for India's boundary...")
-    points_list = [Point(lon, lat) for lon, lat in zip(grid_lon.flatten(), grid_lat.flatten())]
-    mask = np.array([india_union.contains(point) for point in points_list], dtype=bool)
-    mask = mask.reshape(grid_z.shape)
+    for i in range(grid_z.shape[0]):
+        for j in range(grid_z.shape[1]):
+            try:
+                point = Point(grid_lon[i, j], grid_lat[i, j])
+                mask[i, j] = india_union.contains(point)
+            except Exception as e:
+                print(f"Error creating mask at i={i}, j={j}: {e}")
+                mask[i, j] = False
     
-    # Apply mask to grid
-    grid_z = np.where(mask, grid_z, np.nan)
+    # Apply mask
+    grid_z = np.ma.masked_array(grid_z, ~mask)
     
     print("Creating visualization...")
     # Define colormap for solar potential with new color scheme
