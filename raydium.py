@@ -127,19 +127,22 @@ def create_india_solar_map(geojson_path='india-composite.geojson'):
     grid_z[~mask] = np.nan
     
     print("Creating visualization...")
-    # Define colormap for solar potential
+    # Define colormap for solar potential with new color scheme
     colormap = cm.LinearColormap(
-        colors=['#313695', '#4575b4', '#74add1', '#abd9e9', '#fee090', 
-                '#fdae61', '#f46d43', '#d73027', '#a50026'],
+        colors=['#1a237e',  # Dark blue (lowest)
+               '#4fc3f7',   # Light blue
+               '#81c784',   # Light green
+               '#2e7d32',   # Medium green
+               '#1b5e20'],  # Dark green (highest)
         vmin=np.nanmin(values),
         vmax=np.nanmax(values)
     )
     
     # Add the interpolated layer to the map
-    img_array = colormap(grid_z, alpha=0.8)
+    img = colormap(grid_z)  # Removed alpha parameter
     image_bounds = [[bounds[1], bounds[0]], [bounds[3], bounds[2]]]
     folium.raster_layers.ImageOverlay(
-        image=img_array,
+        image=img,
         bounds=image_bounds,
         opacity=0.8,
         name='Solar Potential'
