@@ -7,6 +7,9 @@ from shapely.geometry import Point, Polygon
 from scipy.interpolate import griddata
 import time
 import branca.colormap as cm
+import matplotlib.pyplot as plt
+from matplotlib.colors import ListedColormap
+import os
 
 def fetch_nasa_power_data(lat, lon):
     """
@@ -159,15 +162,37 @@ def create_india_solar_map(geojson_path='india-soi.geojson'):
         vmax=np.nanmax(values)
     )
     
-    # Apply colormap
-    img = colormap(grid_z)
-    image_bounds = [[bounds[1], bounds[0]], [bounds[3], bounds[2]]]
+    # Normalize grid_z for image creation
+    norm = plt.Normalize(vmin=colormap.vmin, vmax=colormap.vmax)
+    cmap = colormap.to_step(n=10).colors  # Create a stepped colormap
     
+    # Create a figure and axis to plot the grid
+    fig, ax = plt.subplots(figsize=(8, 6))
+    ax.set_axis_off()
+    
+    # Plot the interpolated data
+    cax = ax.imshow(grid_z, cmap=ListedColormap(colormap.colors), 
+                    extent=(bounds[0], bounds[2], bounds[1], bounds[3]),
+                    origin='lower', aspect='auto')
+    
+    # Save the figure to a PNG file
+    image_path = 'solar_potential.png'
+    plt.savefig(image_path, bbox_inches='tight', pad_inches=0)
+    plt.close(fig)
+    
+    # Check if the image file was created
+    if not os.path.exists(image_path):
+        raise FileNotFoundError(f"Failed to create image at {image_path}")
+    
+    # Add the image overlay to the map
     folium.raster_layers.ImageOverlay(
-        image=img,
-        bounds=image_bounds,
-        opacity=0.8,
-        name='Solar Potential'
+        name='Solar Potential',
+        image=image_path,
+        bounds=[[bounds[1], bounds[0]], [bounds[3], bounds[2]]],
+        opacity=0.6,
+        interactive=True,
+        cross_origin=False,
+        zindex=1,
     ).add_to(m)
     
     # Add India boundary
