@@ -1,38 +1,44 @@
 # 🌞 Raydium - Solar Potential Analysis for India
 
-Raydium aims to map India's solar potential. This program is still heavily WIP and contributions would be really appreciated. 
+Raydium aims to map India's solar potential using high-resolution data and advanced processing techniques. This project is actively being developed, and contributions are highly appreciated! 🚀
 
 ## 🌟 Features
 
-- **Solar Potential Mapping**: Fetches and calculates solar potential from NASA POWER API data 🌞
+- **Solar Potential Mapping**: Fetches and calculates solar potential using NASA POWER API data 🌞
 - **Interactive Visualization**: Displays solar potential over India with interactive maps 🖼️
-- **High-Resolution Interpolation**: Uses grid sampling for a detailed solar potential map 🗺️
-- **Automated with GitHub Actions**: Automatically runs daily or on-demand in GitHub Actions 🕒
+- **High-Resolution Interpolation**: Generates detailed solar potential maps using grid sampling and interpolation 🗺️
+- **Optimized Data Fetching**:
+  - **Rate Limiting**: Ensures respectful API usage by limiting request rates ⏱️
+  - **Caching**: Stores fetched data locally to minimize redundant API calls 💾
+  - **Concurrency**: Utilizes multithreading for efficient data processing ⚡
+- **Automated with GitHub Actions**: Automatically runs daily or on-demand using GitHub Actions 🕒
+- **Comprehensive Logging**: Tracks the process flow and errors with detailed logs 📜
 
 ## 🛠️ Setup
 
 ### Prerequisites
-- Python 3.8+
-- Required packages in `raydium.py` include: `geopandas`, `folium`, `pvlib`, `requests`, `beautifulsoup4`
+
+- **Python**: Version 3.8 or higher
+- **Required Packages**: Listed in `requirements.txt`
 
 ### 1️⃣ Clone the Repository
 
 ```bash
 git clone https://github.com/your-username/raydium.git
 cd raydium
-```
 
 ### 2️⃣ Install Dependencies
 
 ```bash
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
 Or manually install dependencies with:
 
 ```bash
-pip install geopandas folium pvlib requests beautifulsoup4
-```
+pip install numpy pandas geopandas folium pvlib requests beautifulsoup4 shapely scipy branca matplotlib tqdm```
 
 ### 3️⃣ Run the Script Locally
 
@@ -127,7 +133,9 @@ Both files are accessible as artifacts in GitHub Actions and are downloadable fo
 │   └── workflows
 │       └── run_raydium.yml     # GitHub Actions workflow
 ├── README.md                   # Project documentation
-└── requirements.txt            # Dependencies for local setup
+├── requirements.txt            # Dependencies for local setup
+├── solar_map.log               # Log file for the solar map generation process
+└── solar_potential_high_res.png# High-resolution solar potential image
 ```
 
 ## 📋 Credits
