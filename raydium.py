@@ -3,18 +3,72 @@ import pandas as pd
 import geopandas as gpd
 import folium
 import requests
-from shapely.geometry import Point, Polygon
+from shapely.geometry import Point
 from scipy.interpolate import griddata
 import time
 import branca.colormap as cm
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import hashlib
+import json
+import shelve
+from requests.adapters import HTTPAdapter
+from requests.packages.urllib3.util.retry import Retry
+import logging
+import threading
+from tqdm import tqdm
 
-def fetch_nasa_power_data(lat, lon):
-    """
-    Fetch solar radiation data from NASA POWER API
-    """
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    handlers=[
+        logging.FileHandler("solar_map.log"),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
+
+class RateLimiter:
+    def __init__(self, max_calls, period):
+        self.max_calls = max_calls
+        self.period = period
+        self.lock = threading.Lock()
+        self.calls = []
+    
+    def acquire(self):
+        with self.lock:
+            current = time.time()
+            while self.calls and self.calls[0] <= current - self.period:
+                self.calls.pop(0)
+            if len(self.calls) >= self.max_calls:
+                sleep_time = self.period - (current - self.calls[0]) + 0.1
+                logger.info(f"Rate limit reached. Sleeping for {sleep_time:.2f} seconds.")
+                time.sleep(sleep_time)
+            self.calls.append(time.time())
+
+rate_limiter = RateLimiter(max_calls=1, period=2)
+
+def create_session_with_retry():
+    session = requests.Session()
+    retries = Retry(
+        total=10,
+        backoff_factor=2,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["HEAD", "GET", "OPTIONS"],
+        respect_retry_after_header=True
+    )
+    adapter = HTTPAdapter(max_retries=retries)
+    session.mount('https://', adapter)
+    session.mount('http://', adapter)
+    return session
+
+def fetch_nasa_power_data(lat, lon, cache, session):
+    key = f"{lat}_{lon}"
+    if key in cache:
+        return cache[key]
+    
     base_url = "https://power.larc.nasa.gov/api/temporal/daily/point"
     params = {
         'parameters': 'ALLSKY_SFC_SW_DWN',
@@ -26,165 +80,122 @@ def fetch_nasa_power_data(lat, lon):
         'format': 'JSON'
     }
     
-    try:
-        response = requests.get(base_url, params=params)
-        response.raise_for_status()
-        return response.json()
-    except Exception as e:
-        print(f"Error fetching data for lat={lat}, lon={lon}: {e}")
-        return None
+    while True:
+        try:
+            rate_limiter.acquire()
+            response = session.get(base_url, params=params)
+            if response.status_code == 429:
+                retry_after = response.headers.get('Retry-After')
+                if retry_after:
+                    sleep_time = int(retry_after) + 1
+                else:
+                    sleep_time = 60
+                logger.warning(f"Received 429 for lat={lat}, lon={lon}. Retrying after {sleep_time} seconds.")
+                time.sleep(sleep_time)
+                continue
+            response.raise_for_status()
+            data = response.json()
+            cache[key] = data
+            return data
+        except requests.exceptions.RequestException as e:
+            logger.error(f"RequestException for lat={lat}, lon={lon}: {e}. Retrying in 10 seconds.")
+            time.sleep(10)
+        except json.JSONDecodeError as e:
+            logger.error(f"JSONDecodeError for lat={lat}, lon={lon}: {e}. Skipping this point.")
+            cache[key] = None
+            return None
 
 def calculate_solar_potential(power_data, panel_efficiency=0.2):
-    """
-    Calculate solar potential from radiation data
-    """
     if not power_data:
         return None
-    
     try:
         daily_data = power_data['properties']['parameter']['ALLSKY_SFC_SW_DWN']
         radiation_values = [v * 0.277778 for v in daily_data.values() 
                             if isinstance(v, (int, float)) and v != -999]
-        
         if not radiation_values:
             return None
-            
         return np.mean(radiation_values) * 365 * panel_efficiency
-    except:
+    except KeyError as e:
+        logger.error(f"KeyError while calculating solar potential: {e}")
+        return None
+    except Exception as e:
+        logger.error(f"Unexpected error while calculating solar potential: {e}")
         return None
 
-def is_point_in_india(point, india_union):
-    """
-    Helper function to check if a point is within India's boundary
-    """
-    try:
-        return india_union.contains(Point(point[0], point[1]))
-    except:
-        return False
+def fetch_and_calculate(lat, lon, cache, session):
+    power_data = fetch_nasa_power_data(lat, lon, cache, session)
+    potential = calculate_solar_potential(power_data)
+    if potential is not None:
+        return {'latitude': lat, 'longitude': lon, 'potential': potential}
+    return None
 
 def create_india_solar_map(geojson_path='india-soi.geojson'):
-    # Read India GeoJSON
-    print(f"Reading GeoJSON file from: {geojson_path}")
+    logger.info(f"Reading GeoJSON file from: {geojson_path}")
     india = gpd.read_file(geojson_path)
-    
-    # Simplify the geometry for better performance
     india_simplified = india.geometry.simplify(0.1)
-    
-    # Combine all geometries into a single geometry
     india_union = india_simplified.unary_union
-    
-    # Get India's bounds
-    bounds = india_union.bounds  # (minx, miny, maxx, maxy)
-    print(f"Map bounds: {bounds}")
-    
-    # Create base map centered on India
+    bounds = india_union.bounds
+    logger.info(f"Map bounds: {bounds}")
     m = folium.Map(location=[20.5937, 78.9629], zoom_start=5, tiles='CartoDB positron')
-    
-    # Create a grid with a 2-degree resolution (can be adjusted)
-    lat_range = np.arange(bounds[1], bounds[3], 2)
-    lon_range = np.arange(bounds[0], bounds[2], 2)
-    
+    lat_step = 0.25
+    lon_step = 0.25
+    lat_range = np.arange(bounds[1], bounds[3] + lat_step, lat_step)
+    lon_range = np.arange(bounds[0], bounds[2] + lon_step, lon_step)
+    cache_file = 'nasa_power_cache.db'
+    cache = shelve.open(cache_file)
+    session = create_session_with_retry()
+    max_workers = 3
+    logger.info(f"Starting data collection with {max_workers} workers...")
     solar_data = []
-    total_points = len(lat_range) * len(lon_range)
-    processed_points = 0
-    
-    print(f"Starting data collection for {total_points} potential grid points...")
-    
-    # Fetch data for grid points within India's boundary
-    for lat in lat_range:
-        for lon in lon_range:
-            point = Point(lon, lat)
-            
-            try:
-                # Check if the point lies within India's boundary
-                if india_union.contains(point):
-                    processed_points += 1
-                    print(f"Processing point {processed_points}/{total_points} at lat={lat:.2f}, lon={lon:.2f}")
-                    
-                    power_data = fetch_nasa_power_data(lat, lon)
-                    potential = calculate_solar_potential(power_data)
-                    
-                    if potential is not None:
-                        solar_data.append({
-                            'latitude': lat,
-                            'longitude': lon,
-                            'potential': potential
-                        })
-                    
-                    time.sleep(0.5)  # Slight delay to avoid hitting rate limits
-            except Exception as e:
-                print(f"Error processing point at lat={lat}, lon={lon}: {e}")
-                continue
-    
+    grid_points = [(lat, lon) for lat in lat_range for lon in lon_range if india_union.contains(Point(lon, lat)) or india_union.touches(Point(lon, lat))]
+    total_grid_points = len(grid_points)
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(fetch_and_calculate, lat, lon, cache, session): (lat, lon) for lat, lon in grid_points}
+        for future in tqdm(as_completed(futures), total=total_grid_points, desc="Processing Points"):
+            result = future.result()
+            if result:
+                solar_data.append(result)
+    cache.close()
     solar_df = pd.DataFrame(solar_data)
-    
     if solar_df.empty:
         raise ValueError("No solar data collected")
-    
-    print("Creating interpolation grid...")
-    # Create interpolation grid
-    grid_size = 100  # Finer grid for better visualization
+    logger.info("Creating interpolation grid...")
+    grid_size = 800
     grid_lat = np.linspace(bounds[1], bounds[3], grid_size)
     grid_lon = np.linspace(bounds[0], bounds[2], grid_size)
     grid_lon, grid_lat = np.meshgrid(grid_lon, grid_lat)
-    
-    # Interpolate using linear method
     points = solar_df[['longitude', 'latitude']].values
     values = solar_df['potential'].values
     grid_z = griddata(points, values, (grid_lon, grid_lat), method='linear')
-    
-    # Initialize mask array
-    mask = np.zeros(grid_z.shape, dtype=bool)
-    
-    # Create mask for points within India's boundary
-    print("Creating mask for India's boundary...")
-    for i in range(grid_z.shape[0]):
-        for j in range(grid_z.shape[1]):
-            try:
-                point = Point(grid_lon[i, j], grid_lat[i, j])
-                mask[i, j] = india_union.contains(point)
-            except Exception as e:
-                print(f"Error creating mask at i={i}, j={j}: {e}")
-                mask[i, j] = False
-    
-    # Apply mask
+    logger.info("Creating mask for India's boundary...")
+    grid_points_mesh = [Point(lon, lat) for lon, lat in zip(grid_lon.flatten(), grid_lat.flatten())]
+    india_gdf = gpd.GeoSeries(grid_points_mesh)
+    mask = india_gdf.within(india_union).values.reshape(grid_z.shape)
     grid_z = np.ma.masked_array(grid_z, ~mask)
-    
-    print("Creating visualization...")
-    # Define colormap for solar potential with new color scheme
+    logger.info("Creating visualization...")
     colormap = cm.LinearColormap(
-        colors=['#1a237e',  # Dark blue (lowest)
-                '#4fc3f7',   # Light blue
-                '#81c784',   # Light green
-                '#2e7d32',   # Medium green
-                '#1b5e20'],  # Dark green (highest)
+        ['#440154', '#482878', '#3E4989', '#31688E', '#26828E',
+         '#1F9E89', '#35B779', '#6DCD59', '#B4DE2C', '#FDE725'],
         vmin=np.nanmin(values),
-        vmax=np.nanmax(values)
+        vmax=np.nanmax(values),
+        caption='Solar Potential (kWh/m²/year)'
     )
-    
-    # Normalize grid_z for image creation
     norm = plt.Normalize(vmin=colormap.vmin, vmax=colormap.vmax)
-    cmap = colormap.to_step(n=10).colors  # Create a stepped colormap
-    
-    # Create a figure and axis to plot the grid
-    fig, ax = plt.subplots(figsize=(8, 6))
+    cmap = ListedColormap(colormap.colors)
+    fig, ax = plt.subplots(figsize=(16, 12))
     ax.set_axis_off()
-    
-    # Plot the interpolated data
-    cax = ax.imshow(grid_z, cmap=ListedColormap(colormap.colors), 
-                    extent=(bounds[0], bounds[2], bounds[1], bounds[3]),
-                    origin='lower', aspect='auto')
-    
-    # Save the figure to a PNG file
-    image_path = 'solar_potential.png'
-    plt.savefig(image_path, bbox_inches='tight', pad_inches=0)
+    ax.imshow(
+        grid_z, 
+        cmap=cmap, 
+        extent=(bounds[0], bounds[2], bounds[1], bounds[3]),
+        origin='lower', 
+        aspect='auto'
+    )
+    image_path = 'solar_potential_high_res.png'
+    plt.savefig(image_path, bbox_inches='tight', pad_inches=0, dpi=600)
     plt.close(fig)
-    
-    # Check if the image file was created
     if not os.path.exists(image_path):
         raise FileNotFoundError(f"Failed to create image at {image_path}")
-    
-    # Add the image overlay to the map
     folium.raster_layers.ImageOverlay(
         name='Solar Potential',
         image=image_path,
@@ -194,8 +205,6 @@ def create_india_solar_map(geojson_path='india-soi.geojson'):
         cross_origin=False,
         zindex=1,
     ).add_to(m)
-    
-    # Add India boundary
     folium.GeoJson(
         india,
         style_function=lambda x: {
@@ -206,39 +215,25 @@ def create_india_solar_map(geojson_path='india-soi.geojson'):
         },
         name='India Boundary'
     ).add_to(m)
-    
-    # Add colormap legend
     colormap.add_to(m)
-    colormap.caption = 'Solar Potential (kWh/m²/year)'
-    
-    # Add layer control
     folium.LayerControl().add_to(m)
-    
-    # Save data
     output_csv = 'india_solar_data.csv'
     output_html = 'india_solar_potential.html'
-    
-    print(f"Saving data to {output_csv}")
+    logger.info(f"Saving data to {output_csv}")
     solar_df.to_csv(output_csv, index=False)
-    
-    print(f"Saving map to {output_html}")
+    logger.info(f"Saving map to {output_html}")
     m.save(output_html)
-    
+    logger.info("Solar potential map generation completed successfully.")
     return m, solar_df
 
 def main():
-    """
-    Main function to run the application
-    """
     try:
-        print("Starting solar potential map generation...")
+        logger.info("Starting solar potential map generation with adaptive rate limiting...")
         solar_map, solar_data = create_india_solar_map()
-        print("\nProcess completed successfully!")
-        print("Map has been saved as 'india_solar_potential.html'")
-        print("Raw data has been saved as 'india_solar_data.csv'")
-        
+        logger.info("Process completed successfully!")
+        logger.info("Map has been saved as 'india_solar_potential.html'")
+        logger.info("Raw data has been saved as 'india_solar_data.csv'")
     except Exception as e:
-        print(f"An error occurred: {e}")
+        logger.error(f"An error occurred: {e}")
 
-if __name__ == "__main__":
-    main()
+main()
