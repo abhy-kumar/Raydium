@@ -33,7 +33,7 @@ cd raydium
 python -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
-```
+
 
 Or manually install dependencies with:
 
@@ -47,7 +47,7 @@ pip install numpy pandas geopandas folium pvlib requests beautifulsoup4 shapely 
 
    ```bash
    python raydium.py
-   ```
+
 
    - This will generate `india_solar_potential.html` (an interactive map) and `india_solar_data.csv` (raw data) in your project directory.
 
