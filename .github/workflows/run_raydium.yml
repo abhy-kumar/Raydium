@@ -2,48 +2,53 @@ name: Generate Solar Potential Data
 
 on:
   schedule:
-    - cron: '0 0 * * *'  # Run daily at midnight (00:00)
+    - cron: '0 0 * * *'  # Run daily at midnight (00:00 UTC)
   workflow_dispatch:  # Allow manual trigger
 
 jobs:
   generate-solar-data:
     runs-on: ubuntu-latest
-    
+
     steps:
     - name: Checkout repository
       uses: actions/checkout@v3
-      
+
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
         python-version: '3.10'
-        
-    - name: Install dependencies
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libgeos-dev libproj-dev
+
+    - name: Install Python dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install numpy pandas geopandas folium requests scipy branca
-        
+        pip install numpy pandas geopandas folium requests scipy branca matplotlib tqdm shapely
+
     - name: Run solar potential analysis
       run: |
         python raydium.py
       env:
         PYTHONUNBUFFERED: 1
-        
+
     - name: Check if files were generated
       run: |
-        if [ ! -f india_solar_potential.html ] || [ ! -f india_solar_data.csv ]; then
+        if [ ! -f india_solar_potential.html ] || [ ! -f india_solar_data.csv ] || [ ! -f solar_potential_high_res.png ]; then
           echo "Error: Required files were not generated"
           exit 1
         fi
-        
+
     - name: Configure Git
       run: |
         git config --local user.email "github-actions[bot]@users.noreply.github.com"
         git config --local user.name "github-actions[bot]"
-        
+
     - name: Commit and push if there are changes
       run: |
-        git add india_solar_potential.html india_solar_data.csv
+        git add india_solar_potential.html india_solar_data.csv solar_potential_high_res.png
         git diff --staged --quiet || (git commit -m "Update solar potential data [skip ci]" && git push)
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
