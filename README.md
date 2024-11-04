@@ -26,6 +26,7 @@ Raydium aims to map India's solar potential using high-resolution data and advan
 ```bash
 git clone https://github.com/your-username/raydium.git
 cd raydium
+```
 
 ### 2️⃣ Install Dependencies
 
@@ -33,13 +34,13 @@ cd raydium
 python -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
-
+```
 
 Or manually install dependencies with:
 
 ```bash
 pip install numpy pandas geopandas folium pvlib requests beautifulsoup4 shapely scipy branca matplotlib tqdm```
-
+```
 ### 3️⃣ Run the Script Locally
 
 1. **Upload GeoJSON File**: Ensure you have the `india-soi.geojson` file in the root directory.
@@ -47,7 +48,7 @@ pip install numpy pandas geopandas folium pvlib requests beautifulsoup4 shapely 
 
    ```bash
    python raydium.py
-
+    ```
 
    - This will generate `india_solar_potential.html` (an interactive map) and `india_solar_data.csv` (raw data) in your project directory.
 
