@@ -1,5 +1,4 @@
 name: Generate Solar Potential Data
-
 on:
   schedule:
     - cron: '0 0 * * *'  # Run daily at midnight (00:00 UTC)
@@ -8,10 +7,11 @@ on:
 jobs:
   generate-solar-data:
     runs-on: ubuntu-latest
-
     steps:
     - name: Checkout repository
       uses: actions/checkout@v3
+      with:
+        fetch-depth: 0  # Fetch all history for proper git operations
 
     - name: Set up Python
       uses: actions/setup-python@v4
@@ -46,9 +46,20 @@ jobs:
         git config --local user.email "github-actions[bot]@users.noreply.github.com"
         git config --local user.name "github-actions[bot]"
 
+    - name: Pull and rebase before pushing
+      run: |
+        git pull --rebase origin main
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
     - name: Commit and push if there are changes
       run: |
         git add india_solar_potential.html india_solar_data.csv solar_potential_high_res.png
-        git diff --staged --quiet || (git commit -m "Update solar potential data [skip ci]" && git push)
+        if git diff --staged --quiet; then
+          echo "No changes to commit"
+        else
+          git commit -m "Update solar potential data [skip ci]"
+          git push
+        fi
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
