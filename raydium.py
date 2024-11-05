@@ -143,8 +143,8 @@ def create_india_solar_map(geojson_path='india-soi.geojson'):
     m = folium.Map(location=[center_lat, center_lon], zoom_start=5, tiles='CartoDB positron')
     
     # Define grid parameters
-    lat_step = 0.25
-    lon_step = 0.25
+    lat_step = 0.33
+    lon_step = 0.33
     lat_range = np.arange(bounds[1], bounds[3] + lat_step, lat_step)
     lon_range = np.arange(bounds[0], bounds[2] + lon_step, lon_step)
     
@@ -184,7 +184,7 @@ def create_india_solar_map(geojson_path='india-soi.geojson'):
     logger.info("Creating visualization...")
     
     # Increase grid size for smoother interpolation
-    grid_size = 800
+    grid_size = 750
     
     # Create regular grid
     grid_lat = np.linspace(bounds[1], bounds[3], grid_size)
