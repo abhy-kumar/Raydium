@@ -38,7 +38,7 @@ def create_visualization(data_csv='india_solar_data.csv', geojson_path='india-so
     
     logger.info("Creating visualization...")
 
-    grid_size = 500  # Adjust as necessary
+    grid_size = 250  # Adjust as necessary
     grid_lat = np.linspace(bounds[1], bounds[3], grid_size)
     grid_lon = np.linspace(bounds[0], bounds[2], grid_size)
     grid_lon, grid_lat = np.meshgrid(grid_lon, grid_lat)
@@ -47,7 +47,7 @@ def create_visualization(data_csv='india_solar_data.csv', geojson_path='india-so
     values = solar_df['potential'].values
     grid_z = griddata(points, values, (grid_lon, grid_lat), method='cubic')
 
-    india_union = india.unary_union
+    india_union = india.geometry.unary_union
     india_gdf = gpd.GeoSeries([Point(lon, lat) for lon, lat in zip(grid_lon.flatten(), grid_lat.flatten())])
     mask = india_gdf.within(india_union).values.reshape(grid_z.shape)
     grid_z = np.ma.masked_array(grid_z, ~mask)
