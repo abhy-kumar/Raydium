@@ -45,7 +45,7 @@ def create_visualization(data_csv='india_solar_data.csv', geojson_path='india-so
 
     points = solar_df[['longitude', 'latitude']].values
     values = solar_df['potential'].values
-    grid_z = griddata(points, values, (grid_lon, grid_lat), method='linear')
+    grid_z = griddata(points, values, (grid_lon, grid_lat), method='cubic')
 
     india_union = india.unary_union
     india_gdf = gpd.GeoSeries([Point(lon, lat) for lon, lat in zip(grid_lon.flatten(), grid_lat.flatten())])
