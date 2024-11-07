@@ -28,7 +28,7 @@ def create_visualization(data_csv='india_solar_data.csv', geojson_path='india-so
     logger.info("Creating visualization...")
 
     # Define a denser grid size for smoother heatmap
-    grid_size = 300
+    grid_size = 350
     grid_lat = np.linspace(bounds[1], bounds[3], grid_size)
     grid_lon = np.linspace(bounds[0], bounds[2], grid_size)
     grid_lon, grid_lat = np.meshgrid(grid_lon, grid_lat)
