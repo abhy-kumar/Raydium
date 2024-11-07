@@ -53,7 +53,7 @@ def create_visualization(data_csv='india_solar_data.csv',
     values = solar_df['potential'].values
     
     # Use 'cubic' interpolation with adjusted minimum points
-    grid_z = griddata(points, values, (grid_lon, grid_lat), method='cubic', rescale=True)
+    grid_z = griddata(points, values, (grid_lon, grid_lat), method='nearest', rescale=True)
 
     # Create more precise mask using shapely
     india_union = india.unary_union
@@ -78,7 +78,7 @@ def create_visualization(data_csv='india_solar_data.csv',
                    cmap=ListedColormap(colormap.colors),
                    extent=[bounds[0], bounds[2], bounds[1], bounds[3]],
                    origin='lower',
-                   aspect='auto')
+                   aspect='equal')
     
     # Add boundary with higher resolution
     india.boundary.plot(ax=ax, color='black', linewidth=1)
