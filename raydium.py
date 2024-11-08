@@ -49,22 +49,10 @@ class RateLimiter:
                 await asyncio.sleep(sleep_time)
             self.calls.append(time.time())
 
-rate_limiter = RateLimiter(max_calls=1, period=2)  # 1 call every 2 seconds
+# Adjust rate limiter based on API rate limits
+rate_limiter = RateLimiter(max_calls=5, period=1)  # 5 calls per second
 
 async def fetch_and_calculate(session, latitude, longitude, cache):
-    """
-    Fetch solar data from NASA POWER API for the given latitude and longitude.
-    Calculate solar potential and return the result.
-
-    Args:
-        session (aiohttp.ClientSession): The HTTP session for making requests.
-        latitude (float): Latitude of the point.
-        longitude (float): Longitude of the point.
-        cache (diskcache.Cache): Cache for storing and retrieving fetched data.
-
-    Returns:
-        dict: Dictionary containing solar potential and coordinates, or None if failed.
-    """
     cache_key = f"solar_data_{latitude}_{longitude}"
     if cache_key in cache:
         logger.info(f"Cache hit for coordinates: ({latitude}, {longitude})")
@@ -109,6 +97,16 @@ async def fetch_and_calculate(session, latitude, longitude, cache):
         "potential": solar_potential
     }
 
+async def process_batch(session, batch, cache, solar_data):
+    tasks = [
+        fetch_and_calculate(session, point.y, point.x, cache)
+        for point in batch.geometry
+    ]
+    results = await asyncio.gather(*tasks)
+    for result in results:
+        if result:
+            solar_data.append(result)
+
 async def create_india_solar_map_async(geojson_path='india-soi.geojson'):
     logger.info(f"Reading GeoJSON file from: {geojson_path}")
     india = gpd.read_file(geojson_path)
@@ -122,20 +120,52 @@ async def create_india_solar_map_async(geojson_path='india-soi.geojson'):
     logger.info(f"Grid resolution set to {resolution} meters.")
     logger.info(f"Grid dimensions: width={width}, height={height}")
 
-    transform = from_bounds(bounds[0], bounds[1], bounds[2], bounds[3], width, height)
-    x_coords = np.linspace(bounds[0], bounds[2], width)
-    y_coords = np.linspace(bounds[1], bounds[3], height)
-    xx, yy = np.meshgrid(x_coords, y_coords)
-    points = [Point(x, y) for x, y in zip(xx.flatten(), yy.flatten())]
-    grid_gdf = gpd.GeoDataFrame(geometry=points, crs=india_proj.crs)
-    logger.info("Grid points created.")
+    try:
+        transform = from_bounds(bounds[0], bounds[1], bounds[2], bounds[3], width, height)
+        logger.info("Transform matrix created.")
+    except Exception as e:
+        logger.error(f"Error creating transform matrix: {e}")
+        raise
 
-    mask = grid_gdf.within(india_proj.unary_union)
-    valid_points = grid_gdf[mask]
-    logger.info(f"Valid points within India: {len(valid_points)}")
+    try:
+        x_coords = np.linspace(bounds[0], bounds[2], width)
+        y_coords = np.linspace(bounds[1], bounds[3], height)
+        xx, yy = np.meshgrid(x_coords, y_coords)
+        logger.info("Meshgrid created.")
+    except Exception as e:
+        logger.error(f"Error creating meshgrid: {e}")
+        raise
 
-    valid_points_wgs84 = valid_points.to_crs('EPSG:4326')
-    logger.info("Converted points to WGS84.")
+    try:
+        points = [Point(x, y) for x, y in zip(xx.flatten(), yy.flatten())]
+        grid_gdf = gpd.GeoDataFrame(geometry=points, crs=india_proj.crs)
+        logger.info("Grid points created.")
+    except Exception as e:
+        logger.error(f"Error creating grid GeoDataFrame: {e}")
+        raise
+
+    try:
+        logger.info("Creating spatial index for India geometry.")
+        india_union = india_proj.unary_union
+        sindex = gpd.GeoSeries([india_union]).sindex
+        logger.info("Spatial index created.")
+        
+        logger.info("Performing spatial 'within' operation.")
+        mask = grid_gdf.within(india_union)
+        logger.info("Mask created.")
+        valid_points = grid_gdf[mask]
+        logger.info(f"Valid points within India: {len(valid_points)}")
+    except Exception as e:
+        logger.error(f"Error during spatial 'within' operation: {e}")
+        raise
+
+    try:
+        logger.info("Converting valid points to WGS84 CRS.")
+        valid_points_wgs84 = valid_points.to_crs('EPSG:4326')
+        logger.info("Conversion to WGS84 completed.")
+    except Exception as e:
+        logger.error(f"Error converting CRS: {e}")
+        raise
 
     cache = dc.Cache('nasa_power_cache')
     connector = aiohttp.TCPConnector(limit=100)  # Adjusted for higher concurrency
@@ -143,28 +173,21 @@ async def create_india_solar_map_async(geojson_path='india-soi.geojson'):
     logger.info("Starting data collection with asynchronous requests...")
     solar_data = []
 
-    semaphore = asyncio.Semaphore(100)  # Limit to 100 concurrent tasks
-
-    async def fetch_with_semaphore(session, point):
-        async with semaphore:
-            return await fetch_and_calculate(session, point.y, point.x, cache)
+    BATCH_SIZE = 1000  # Define an appropriate batch size
+    total_points = len(valid_points_wgs84)
+    logger.info(f"Total valid points to process: {total_points}")
 
     async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
-        tasks = [
-            fetch_with_semaphore(session, point)
-            for point in valid_points_wgs84.geometry
-        ]
-        for idx, future in enumerate(tqdm_asyncio.as_completed(tasks, total=len(tasks), desc="Processing Points"), 1):
-            result = await future
-            if result:
-                solar_data.append(result)
-            if idx % 1000 == 0:
-                logger.info(f"Processed {idx} points.")
+        for i in range(0, total_points, BATCH_SIZE):
+            batch = valid_points_wgs84.iloc[i:i+BATCH_SIZE]
+            logger.info(f"Processing batch {i//BATCH_SIZE + 1}/{(total_points + BATCH_SIZE - 1)//BATCH_SIZE}")
+            await process_batch(session, batch, cache, solar_data)
+            logger.info(f"Completed batch {i//BATCH_SIZE + 1}/{(total_points + BATCH_SIZE - 1)//BATCH_SIZE}")
 
     cache.close()
     logger.info("Data collection completed.")
 
-    # Create DataFrame and convert to GeoDataFrame
+        # Create DataFrame and convert to GeoDataFrame
     solar_df = pd.DataFrame(solar_data)
     solar_gdf = gpd.GeoDataFrame(
         solar_df,
