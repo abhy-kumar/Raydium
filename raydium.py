@@ -51,6 +51,74 @@ class RateLimiter:
 
 rate_limiter = RateLimiter(max_calls=1, period=2)  # 1 call every 2 seconds
 
+async def fetch_and_calculate(session, latitude, longitude, cache):
+    """
+    Fetch solar data from NASA POWER API for the given latitude and longitude.
+    Calculate solar potential and return the result.
+
+    Args:
+        session (aiohttp.ClientSession): The HTTP session for making requests.
+        latitude (float): Latitude of the point.
+        longitude (float): Longitude of the point.
+        cache (diskcache.Cache): Cache for storing and retrieving fetched data.
+
+    Returns:
+        dict: Dictionary containing solar potential and coordinates, or None if failed.
+    """
+    # Define the cache key based on coordinates
+    cache_key = f"solar_data_{latitude}_{longitude}"
+
+    # Check if data is already cached
+    if cache_key in cache:
+        logger.info(f"Cache hit for coordinates: ({latitude}, {longitude})")
+        solar_potential = cache[cache_key]
+    else:
+        logger.info(f"Fetching data for coordinates: ({latitude}, {longitude})")
+        # NASA POWER API endpoint for solar radiation
+        api_url = "https://power.larc.nasa.gov/api/temporal/daily/point"
+
+        # Define API parameters
+        params = {
+            "parameters": "ALLSKY_SFC_SW_DWN",  # All-sky surface shortwave downwelling radiation
+            "community": "SB",
+            "longitude": longitude,
+            "latitude": latitude,
+            "start": "20200101",
+            "end": "20201231",
+            "format": "JSON"
+        }
+
+        try:
+            await rate_limiter.acquire()  # Ensure rate limiting
+            async with session.get(api_url, params=params) as response:
+                if response.status != 200:
+                    logger.error(f"Failed to fetch data for ({latitude}, {longitude}). Status: {response.status}")
+                    return None
+                data = await response.json()
+
+                # Extract the solar radiation data
+                solar_radiation = data.get("properties", {}).get("parameter", {}).get("ALLSKY_SFC_SW_DWN", {})
+                if not solar_radiation:
+                    logger.error(f"No solar radiation data found for ({latitude}, {longitude})")
+                    return None
+
+                # Calculate the average solar potential (in kWh/m²/year)
+                total_radiation = sum(solar_radiation.values())
+                average_radiation = total_radiation / len(solar_radiation) * 0.0036  # Convert from MJ/m²/day to kWh/m²/year
+                solar_potential = round(average_radiation, 2)
+
+                # Store in cache
+                cache[cache_key] = solar_potential
+        except Exception as e:
+            logger.error(f"Exception while fetching data for ({latitude}, {longitude}): {e}")
+            return None
+
+    return {
+        "latitude": latitude,
+        "longitude": longitude,
+        "potential": solar_potential
+    }
+
 async def create_india_solar_map_async(geojson_path='india-soi.geojson'):
     logger.info(f"Reading GeoJSON file from: {geojson_path}")
     
@@ -124,17 +192,17 @@ async def create_india_solar_map_async(geojson_path='india-soi.geojson'):
     # Fill raster with solar potential values
     for idx, row in solar_gdf_proj.iterrows():
         # Get raster indices for point
-        col, row = ~transform * (row.geometry.x, row.geometry.y)
-        col, row = int(col), int(row)
-        if 0 <= row < height and 0 <= col < width:
-            raster_data[row, col] = row['potential']
+        col_float, row_float = ~transform * (row.geometry.x, row.geometry.y)
+        col, row_idx = int(col_float), int(row_float)
+        if 0 <= row_idx < height and 0 <= col < width:
+            raster_data[row_idx, col] = row['potential']
     
     # Create mask from India boundary
     geometry = [feature['geometry'] for feature in india_proj.__geo_interface__['features']]
-    mask = geometry_mask(geometry, out_shape=(height, width), transform=transform, invert=True)
+    mask_raster = geometry_mask(geometry, out_shape=(height, width), transform=transform, invert=True)
     
     # Apply mask
-    raster_data = np.ma.masked_array(raster_data, ~mask)
+    raster_data = np.ma.masked_array(raster_data, ~mask_raster)
     
     # Create visualization
     fig, ax = plt.subplots(figsize=(20, 24))
