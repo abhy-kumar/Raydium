@@ -1,131 +1,56 @@
-name: Generate Solar Potential Data
+# File: .github/workflows/run_raydium.yml
+
+name: Run Raydium Solar Map Generation
 
 on:
-  schedule:
-    - cron: '0 0 * * *'  # Run daily at midnight (00:00 UTC)
-  workflow_dispatch:      # Allow manual trigger
+  # Allows manual triggering of the workflow
+  workflow_dispatch:
 
 jobs:
-  collect-data:
-    name: Data Collection
+  build:
     runs-on: ubuntu-latest
 
     steps:
+      # 1. Checkout the repository
       - name: Checkout Repository
         uses: actions/checkout@v3
-        with:
-          fetch-depth: 0
 
-      - name: Set Up Python Environment
+      # 2. Set up Python environment
+      - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.10'
+          python-version: '3.10'  # Specify the Python version you need
 
-      - name: Install System Dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libgeos-dev libproj-dev
-
-      - name: Install Python Dependencies
+      # 3. Install dependencies
+      - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install numpy pandas geopandas folium scipy branca matplotlib tqdm shapely aiohttp diskcache
+          pip install aiohttp numpy pandas geopandas folium shapely folium branca matplotlib diskcache tqdm rasterio pyproj affine
 
-      - name: Run Data Collection
+      # 4. Run the Python script
+      - name: Run Python Script
         run: |
-          python data_collection.py
-        env:
-          PYTHONUNBUFFERED: 1
+          python run_raydium.py
 
-      - name: Upload Solar Data as Artifact
-        uses: actions/upload-artifact@v3
-        with:
-          name: solar-data
-          path: india_solar_data.csv
-
-  generate-visualization:
-    name: Generate Visualization
-    runs-on: ubuntu-latest
-    needs: collect-data
-
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v3
-        with:
-          fetch-depth: 0
-
-      - name: Download Solar Data Artifact
-        uses: actions/download-artifact@v3
-        with:
-          name: solar-data
-          path: ./data
-
-      - name: Set Up Python Environment
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.10'
-
-      - name: Install System Dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libgeos-dev libproj-dev
-
-      - name: Install Python Dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install numpy pandas geopandas folium scipy branca matplotlib tqdm shapely aiohttp diskcache
-
-      - name: Run Visualization
-        run: |
-          python visualization.py
-        env:
-          PYTHONUNBUFFERED: 1
-
-      - name: Upload Visualization Artifacts
-        uses: actions/upload-artifact@v3
-        with:
-          name: visualization
-          path: |
-            india_solar_potential.html
-            solar_potential_high_res.png
-
-  commit-data:
-    name: Commit and Push Generated Files
-    runs-on: ubuntu-latest
-    needs: [collect-data, generate-visualization]
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v3
-        with:
-          fetch-depth: 0
-
-      - name: Download Solar Data Artifact
-        uses: actions/download-artifact@v3
-        with:
-          name: solar-data
-          path: ./data
-
-      - name: Download Visualization Artifacts
-        uses: actions/download-artifact@v3
-        with:
-          name: visualization
-          path: ./visualization
-
-      - name: Configure Git Credentials
+      # 5. Configure Git for committing changes
+      - name: Configure Git
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Copy Generated Files to Repository
+      # 6. Add generated files to git
+      - name: Add Output Files
         run: |
-          cp ./data/india_solar_data.csv .
-          cp ./visualization/india_solar_potential.html .
-          cp ./visualization/solar_potential_high_res.png .
+          git add india_solar_potential.html india_solar_data.csv solar_potential_high_res.png solar_map.log
 
-      - name: Commit and Push Changes
+      # 7. Commit the changes
+      - name: Commit Changes
         run: |
-          git add india_solar_data.csv india_solar_potential.html solar_potential_high_res.png
-          git diff --cached --exit-code || git commit -m "Update solar potential data [skip ci]"
-          git push
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          git commit -m "Update solar map outputs via GitHub Actions" || echo "No changes to commit"
+
+      # 8. Push the changes back to the repository
+      - name: Push Changes
+        uses: ad-m/github-push-action@v0.6.0
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          branch: ${{ github.ref }}
