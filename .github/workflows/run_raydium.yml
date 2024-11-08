@@ -1,32 +1,37 @@
-# File: .github/workflows/run_raydium.yml
-
 name: Run Raydium Solar Map Generation
-
 on:
-  # Allows manual triggering of the workflow
   workflow_dispatch:
-
-  # Optional: Schedule the workflow to run periodically (e.g., daily at midnight UTC)
-  # Uncomment the following lines to enable scheduling
   # schedule:
-  #   - cron: '0 0 * * *'  # Runs every day at midnight UTC
+  #   - cron: '0 0 * * *'
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
-      # 1. Checkout the repository
       - name: Checkout Repository
         uses: actions/checkout@v3
 
-      # 2. Set up Python environment
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.10'  # Specify the Python version you need
+          python-version: '3.10'
 
-      # 3. Cache pip dependencies
+      # Install GDAL dependencies first
+      - name: Install GDAL dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gdal-bin libgdal-dev python3-gdal
+
+      # Get GDAL version and set environment variables
+      - name: Set GDAL environment variables
+        run: |
+          export GDAL_VERSION=$(gdal-config --version)
+          export CPLUS_INCLUDE_PATH=/usr/include/gdal
+          export C_INCLUDE_PATH=/usr/include/gdal
+          echo "GDAL_VERSION=$GDAL_VERSION" >> $GITHUB_ENV
+          echo "CPLUS_INCLUDE_PATH=$CPLUS_INCLUDE_PATH" >> $GITHUB_ENV
+          echo "C_INCLUDE_PATH=$C_INCLUDE_PATH" >> $GITHUB_ENV
+
       - name: Cache pip dependencies
         uses: actions/cache@v3
         with:
@@ -35,7 +40,6 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pip-
 
-      # 4. Cache NASA POWER data
       - name: Cache NASA POWER data
         uses: actions/cache@v3
         with:
@@ -44,43 +48,41 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-nasa_power_cache-
 
-      # 5. Install dependencies from requirements.txt
+      # Install dependencies in the correct order
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
+          pip install wheel setuptools
+          pip install GDAL==$(gdal-config --version)
+          pip install fiona==1.9.4
           pip install -r requirements.txt
 
-      # 6. Verify 'india-soi.geojson' presence
       - name: Verify 'india-soi.geojson' Presence
         run: |
           if [ -f india-soi.geojson ]; then
             echo "'india-soi.geojson' found."
           else
             echo "'india-soi.geojson' not found. Please ensure it exists in the repository root."
-            exit 1  # Exit the workflow with an error
+            exit 1
           fi
 
-      # 7. List files before running the script (Diagnostic)
       - name: List Files Before Script Execution
         run: |
           echo "Listing files before running the script:"
           ls -la
 
-      # 8. Run the Python script and capture output
       - name: Run Python Script
         run: |
           echo "Executing raydium.py..."
           python raydium.py
 
-      # 9. List files after running the script (Diagnostic)
       - name: List Files After Script Execution
         run: |
           echo "Listing files after running the script:"
           ls -la
 
-      # 10. Optionally, display contents of log file if it exists (Diagnostic)
       - name: Display log file
-        if: success()
+        if: always()  # Changed to always() to see logs even if script fails
         run: |
           if [ -f "solar_map.log" ]; then
             echo "Displaying solar_map.log contents:"
@@ -89,23 +91,19 @@ jobs:
             echo "solar_map.log does not exist."
           fi
 
-      # 11. Configure Git for committing changes
       - name: Configure Git
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      # 12. Add generated files to git
       - name: Add Output Files
         run: |
           git add india_solar_potential.html india_solar_data.csv solar_potential_high_res.png solar_map.log || echo "No output files to add."
 
-      # 13. Commit the changes
       - name: Commit Changes
         run: |
           git commit -m "Update solar map outputs via GitHub Actions" || echo "No changes to commit"
 
-      # 14. Push the changes back to the repository
       - name: Push Changes
         uses: ad-m/github-push-action@v0.6.0
         with:
