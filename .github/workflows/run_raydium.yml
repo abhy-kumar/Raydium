@@ -5,7 +5,7 @@ name: Run Raydium Solar Map Generation
 on:
   # Allows manual triggering of the workflow
   workflow_dispatch:
-  
+
   # Optional: Schedule the workflow to run periodically (e.g., daily at midnight UTC)
   # Uncomment the following lines to enable scheduling
   # schedule:
@@ -35,13 +35,22 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pip-
 
-      # 4. Install dependencies from requirements.txt
+      # 4. Cache NASA POWER data
+      - name: Cache NASA POWER data
+        uses: actions/cache@v3
+        with:
+          path: nasa_power_cache
+          key: ${{ runner.os }}-nasa_power_cache-${{ hashFiles('**/raydium.py') }}
+          restore-keys: |
+            ${{ runner.os }}-nasa_power_cache-
+
+      # 5. Install dependencies from requirements.txt
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # 5. Verify 'india-soi.geojson' presence
+      # 6. Verify 'india-soi.geojson' presence
       - name: Verify 'india-soi.geojson' Presence
         run: |
           if [ -f india-soi.geojson ]; then
@@ -51,48 +60,52 @@ jobs:
             exit 1  # Exit the workflow with an error
           fi
 
-      # 6. List files before running the script (Diagnostic)
+      # 7. List files before running the script (Diagnostic)
       - name: List Files Before Script Execution
         run: |
           echo "Listing files before running the script:"
           ls -la
 
-      # 7. Run the Python script and capture output
+      # 8. Run the Python script and capture output
       - name: Run Python Script
         run: |
           echo "Executing raydium.py..."
           python raydium.py
 
-      # 8. List files after running the script (Diagnostic)
+      # 9. List files after running the script (Diagnostic)
       - name: List Files After Script Execution
         run: |
           echo "Listing files after running the script:"
           ls -la
 
-      # 9. Optionally, display contents of log file if it exists (Diagnostic)
+      # 10. Optionally, display contents of log file if it exists (Diagnostic)
       - name: Display log file
-        if: success() && exists('solar_map.log')
+        if: success()
         run: |
-          echo "Displaying solar_map.log contents:"
-          cat solar_map.log
+          if [ -f "solar_map.log" ]; then
+            echo "Displaying solar_map.log contents:"
+            cat solar_map.log
+          else
+            echo "solar_map.log does not exist."
+          fi
 
-      # 10. Configure Git for committing changes
+      # 11. Configure Git for committing changes
       - name: Configure Git
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      # 11. Add generated files to git
+      # 12. Add generated files to git
       - name: Add Output Files
         run: |
           git add india_solar_potential.html india_solar_data.csv solar_potential_high_res.png solar_map.log || echo "No output files to add."
 
-      # 12. Commit the changes
+      # 13. Commit the changes
       - name: Commit Changes
         run: |
           git commit -m "Update solar map outputs via GitHub Actions" || echo "No changes to commit"
 
-      # 13. Push the changes back to the repository
+      # 14. Push the changes back to the repository
       - name: Push Changes
         uses: ad-m/github-push-action@v0.6.0
         with:
