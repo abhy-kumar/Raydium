@@ -4,17 +4,21 @@ import numpy as np
 import pandas as pd
 import geopandas as gpd
 import folium
-from shapely.geometry import Point
-from scipy.interpolate import griddata
+from shapely.geometry import Point, box
 import time
 import branca.colormap as cm
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap
-import os
 import logging
 import diskcache as dc
 from tqdm.asyncio import tqdm_asyncio
 import json
+import rasterio
+from rasterio.transform import from_bounds
+from rasterio.features import geometry_mask
+from rasterio.warp import calculate_default_transform, reproject, Resampling
+import pyproj
+from affine import Affine
 
 # Logging setup
 logging.basicConfig(
@@ -47,168 +51,140 @@ class RateLimiter:
 
 rate_limiter = RateLimiter(max_calls=1, period=2)  # 1 call every 2 seconds
 
-async def fetch_nasa_power_data(session, lat, lon, cache):
-    key = f"{lat}_{lon}"
-    if key in cache:
-        return cache.get(key)
-    
-    base_url = "https://power.larc.nasa.gov/api/temporal/daily/point"
-    params = {
-        'parameters': 'ALLSKY_SFC_SW_DWN',
-        'community': 'RE',
-        'longitude': lon,
-        'latitude': lat,
-        'start': '20230101',
-        'end': '20231231',
-        'format': 'JSON'
-    }
-    
-    while True:
-        try:
-            await rate_limiter.acquire()
-            async with session.get(base_url, params=params) as response:
-                if response.status == 429:
-                    retry_after = response.headers.get('Retry-After')
-                    sleep_time = int(retry_after) + 1 if retry_after else 60
-                    logger.warning(f"Received 429 for lat={lat}, lon={lon}. Retrying after {sleep_time} seconds.")
-                    await asyncio.sleep(sleep_time)
-                    continue
-                response.raise_for_status()
-                data = await response.json()
-                cache.set(key, data)
-                return data
-        except aiohttp.ClientError as e:
-            logger.error(f"ClientError for lat={lat}, lon={lon}: {e}. Retrying in 10 seconds.")
-            await asyncio.sleep(10)
-        except asyncio.TimeoutError:
-            logger.error(f"TimeoutError for lat={lat}, lon={lon}. Retrying in 10 seconds.")
-            await asyncio.sleep(10)
-        except json.JSONDecodeError as e:
-            logger.error(f"JSONDecodeError for lat={lat}, lon={lon}: {e}. Skipping this point.")
-            cache.set(key, None)
-            return None
-
-def calculate_solar_potential(power_data, panel_efficiency=0.2):
-    if not power_data:
-        return None
-    try:
-        daily_data = power_data['properties']['parameter']['ALLSKY_SFC_SW_DWN']
-        radiation_values = [v * 0.277778 for v in daily_data.values() 
-                            if isinstance(v, (int, float)) and v != -999]
-        if not radiation_values:
-            return None
-        return np.mean(radiation_values) * 365 * panel_efficiency
-    except KeyError as e:
-        logger.error(f"KeyError while calculating solar potential: {e}")
-        return None
-    except Exception as e:
-        logger.error(f"Unexpected error while calculating solar potential: {e}")
-        return None
-
-async def fetch_and_calculate(session, lat, lon, cache):
-    power_data = await fetch_nasa_power_data(session, lat, lon, cache)
-    potential = calculate_solar_potential(power_data)
-    if potential is not None:
-        return {'latitude': lat, 'longitude': lon, 'potential': potential}
-    return None
-
 async def create_india_solar_map_async(geojson_path='india-soi.geojson'):
     logger.info(f"Reading GeoJSON file from: {geojson_path}")
+    
+    # Read and reproject the GeoJSON to a suitable projection for India
     india = gpd.read_file(geojson_path)
     
-    bounds = india.total_bounds
-    logger.info(f"Map bounds: {bounds}")
+    # Convert to Asia South Albers Equal Area Conic projection
+    india_proj = india.to_crs('EPSG:24370')  # This projection is suitable for India
+    bounds = india_proj.total_bounds
     
-    center_lat = (bounds[1] + bounds[3]) / 2
-    center_lon = (bounds[0] + bounds[2]) / 2
-    m = folium.Map(location=[center_lat, center_lon], zoom_start=5, tiles='CartoDB positron')
+    # Calculate grid parameters
+    resolution = 5000  # 5km resolution
+    width = int((bounds[2] - bounds[0]) / resolution)
+    height = int((bounds[3] - bounds[1]) / resolution)
     
-    # Increased grid step size to reduce number of points
-    lat_step = 0.5
-    lon_step = 0.5
-    lat_range = np.arange(bounds[1], bounds[3] + lat_step, lat_step)
-    lon_range = np.arange(bounds[0], bounds[2] + lon_step, lon_step)
+    # Create the transform matrix for the raster
+    transform = from_bounds(bounds[0], bounds[1], bounds[2], bounds[3], width, height)
     
+    # Create grid points in the projected CRS
+    x_coords = np.linspace(bounds[0], bounds[2], width)
+    y_coords = np.linspace(bounds[1], bounds[3], height)
+    xx, yy = np.meshgrid(x_coords, y_coords)
+    
+    # Create point geometries for each grid cell
+    points = [Point(x, y) for x, y in zip(xx.flatten(), yy.flatten())]
+    grid_gdf = gpd.GeoDataFrame(geometry=points, crs=india_proj.crs)
+    
+    # Create mask for points within India
+    mask = grid_gdf.within(india_proj.unary_union)
+    valid_points = grid_gdf[mask]
+    
+    # Convert points back to WGS84 for API calls
+    valid_points_wgs84 = valid_points.to_crs('EPSG:4326')
+    
+    # Setup cache and session
     cache = dc.Cache('nasa_power_cache')
-    connector = aiohttp.TCPConnector(limit=10)  # Limit concurrency
-    timeout = aiohttp.ClientTimeout(total=60)  # Set timeout for requests
+    connector = aiohttp.TCPConnector(limit=10)
+    timeout = aiohttp.ClientTimeout(total=60)
     
     logger.info("Starting data collection with asynchronous requests...")
     solar_data = []
     
-    india_union = india.unary_union
-    grid_points = [(lat, lon) for lat in lat_range for lon in lon_range 
-                   if india_union.contains(Point(lon, lat)) or india_union.touches(Point(lon, lat))]
-    
-    total_grid_points = len(grid_points)
-    logger.info(f"Total grid points to process: {total_grid_points}")
-    
     async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
         tasks = [
-            fetch_and_calculate(session, lat, lon, cache)
-            for lat, lon in grid_points
+            fetch_and_calculate(session, point.y, point.x, cache)
+            for point in valid_points_wgs84.geometry
         ]
-        for future in tqdm_asyncio.as_completed(tasks, total=total_grid_points, desc="Processing Points"):
+        
+        for future in tqdm_asyncio.as_completed(tasks, total=len(tasks), desc="Processing Points"):
             result = await future
             if result:
                 solar_data.append(result)
     
     cache.close()
     
+    # Create DataFrame and convert to GeoDataFrame
     solar_df = pd.DataFrame(solar_data)
-    if solar_df.empty:
-        raise ValueError("No solar data collected")
-    
-    logger.info("Creating visualization...")
-    
-    grid_size = 500  # Reduced grid size for faster processing
-    grid_lat = np.linspace(bounds[1], bounds[3], grid_size)
-    grid_lon = np.linspace(bounds[0], bounds[2], grid_size)
-    grid_lon, grid_lat = np.meshgrid(grid_lon, grid_lat)
-    
-    points = solar_df[['longitude', 'latitude']].values
-    values = solar_df['potential'].values
-    grid_z = griddata(points, values, (grid_lon, grid_lat), method='linear')
-    
-    india_gdf = gpd.GeoSeries([Point(lon, lat) for lon, lat in zip(grid_lon.flatten(), grid_lat.flatten())])
-    mask = india_gdf.within(india_union).values.reshape(grid_z.shape)
-    grid_z = np.ma.masked_array(grid_z, ~mask)
-    
-    colormap = cm.LinearColormap(
-        ['#440154', '#482878', '#3E4989', '#31688E', '#26828E',
-         '#1F9E89', '#35B779', '#6DCD59', '#B4DE2C', '#FDE725'],
-        vmin=np.nanmin(values),
-        vmax=np.nanmax(values),
-        caption='Solar Potential (kWh/m²/year)'
+    solar_gdf = gpd.GeoDataFrame(
+        solar_df,
+        geometry=[Point(xy) for xy in zip(solar_df.longitude, solar_df.latitude)],
+        crs='EPSG:4326'
     )
     
+    # Project to the same CRS as the boundary
+    solar_gdf_proj = solar_gdf.to_crs(india_proj.crs)
+    
+    # Create empty raster
+    raster_data = np.zeros((height, width), dtype=np.float32)
+    raster_data[:] = np.nan
+    
+    # Fill raster with solar potential values
+    for idx, row in solar_gdf_proj.iterrows():
+        # Get raster indices for point
+        col, row = ~transform * (row.geometry.x, row.geometry.y)
+        col, row = int(col), int(row)
+        if 0 <= row < height and 0 <= col < width:
+            raster_data[row, col] = row['potential']
+    
+    # Create mask from India boundary
+    geometry = [feature['geometry'] for feature in india_proj.__geo_interface__['features']]
+    mask = geometry_mask(geometry, out_shape=(height, width), transform=transform, invert=True)
+    
+    # Apply mask
+    raster_data = np.ma.masked_array(raster_data, ~mask)
+    
+    # Create visualization
     fig, ax = plt.subplots(figsize=(20, 24))
     ax.set_axis_off()
     
-    img = ax.imshow(
-        grid_z,
-        cmap=ListedColormap(colormap.colors),
-        extent=[bounds[0], bounds[2], bounds[1], bounds[3]],
-        origin='lower',
-        aspect='auto'
+    # Create colormap
+    colormap = cm.LinearColormap(
+        ['#440154', '#482878', '#3E4989', '#31688E', '#26828E',
+         '#1F9E89', '#35B779', '#6DCD59', '#B4DE2C', '#FDE725'],
+        vmin=np.nanmin(raster_data),
+        vmax=np.nanmax(raster_data),
+        caption='Solar Potential (kWh/m²/year)'
     )
     
-    india.boundary.plot(ax=ax, color='black', linewidth=1)
+    # Plot the raster
+    img = ax.imshow(
+        raster_data,
+        extent=[bounds[0], bounds[2], bounds[1], bounds[3]],
+        cmap=ListedColormap(colormap.colors),
+        origin='lower'
+    )
     
+    # Plot boundary
+    india_proj.boundary.plot(ax=ax, color='black', linewidth=1)
+    
+    # Save high-resolution image
     image_path = 'solar_potential_high_res.png'
-    plt.savefig(image_path, bbox_inches='tight', pad_inches=0, dpi=300)  # Reduced DPI for faster saving
+    plt.savefig(image_path, bbox_inches='tight', pad_inches=0, dpi=300)
     plt.close(fig)
+    
+    # Create Folium map
+    center_lat = (india.total_bounds[1] + india.total_bounds[3]) / 2
+    center_lon = (india.total_bounds[0] + india.total_bounds[2]) / 2
+    m = folium.Map(location=[center_lat, center_lon], zoom_start=5, tiles='CartoDB positron')
+    
+    # Add the raster overlay
+    img_bounds = [[india.total_bounds[1], india.total_bounds[0]], 
+                  [india.total_bounds[3], india.total_bounds[2]]]
     
     folium.raster_layers.ImageOverlay(
         name='Solar Potential',
         image=image_path,
-        bounds=[[bounds[1], bounds[0]], [bounds[3], bounds[2]]],
+        bounds=img_bounds,
         opacity=0.7,
         interactive=True,
         cross_origin=False,
         zindex=1,
     ).add_to(m)
     
+    # Add boundary overlay
     folium.GeoJson(
         india,
         style_function=lambda x: {
@@ -220,14 +196,14 @@ async def create_india_solar_map_async(geojson_path='india-soi.geojson'):
         name='India Boundary'
     ).add_to(m)
     
+    # Add colormap and layer control
     colormap.add_to(m)
     folium.LayerControl().add_to(m)
     
+    # Save outputs
     output_csv = 'india_solar_data.csv'
     output_html = 'india_solar_potential.html'
-    logger.info(f"Saving data to {output_csv}")
     solar_df.to_csv(output_csv, index=False)
-    logger.info(f"Saving map to {output_html}")
     m.save(output_html)
     
     return m, solar_df
