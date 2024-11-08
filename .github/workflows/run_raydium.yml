@@ -41,28 +41,58 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # 5. Run the Python script
+      # 5. Verify 'india-soi.geojson' presence
+      - name: Verify 'india-soi.geojson' Presence
+        run: |
+          if [ -f india-soi.geojson ]; then
+            echo "'india-soi.geojson' found."
+          else
+            echo "'india-soi.geojson' not found. Please ensure it exists in the repository root."
+            exit 1  # Exit the workflow with an error
+          fi
+
+      # 6. List files before running the script (Diagnostic)
+      - name: List Files Before Script Execution
+        run: |
+          echo "Listing files before running the script:"
+          ls -la
+
+      # 7. Run the Python script and capture output
       - name: Run Python Script
         run: |
-          python raydium.py  # Executes the raydium.py script located in the root directory
+          echo "Executing raydium.py..."
+          python raydium.py
 
-      # 6. Configure Git for committing changes
+      # 8. List files after running the script (Diagnostic)
+      - name: List Files After Script Execution
+        run: |
+          echo "Listing files after running the script:"
+          ls -la
+
+      # 9. Optionally, display contents of log file if it exists (Diagnostic)
+      - name: Display log file
+        if: success() && exists('solar_map.log')
+        run: |
+          echo "Displaying solar_map.log contents:"
+          cat solar_map.log
+
+      # 10. Configure Git for committing changes
       - name: Configure Git
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      # 7. Add generated files to git
+      # 11. Add generated files to git
       - name: Add Output Files
         run: |
-          git add india_solar_potential.html india_solar_data.csv solar_potential_high_res.png solar_map.log
+          git add india_solar_potential.html india_solar_data.csv solar_potential_high_res.png solar_map.log || echo "No output files to add."
 
-      # 8. Commit the changes
+      # 12. Commit the changes
       - name: Commit Changes
         run: |
           git commit -m "Update solar map outputs via GitHub Actions" || echo "No changes to commit"
 
-      # 9. Push the changes back to the repository
+      # 13. Push the changes back to the repository
       - name: Push Changes
         uses: ad-m/github-push-action@v0.6.0
         with:
