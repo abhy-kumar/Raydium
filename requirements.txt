@@ -4,7 +4,7 @@ geopandas==0.13.0
 folium==0.12.1
 requests==2.31.0
 scipy==1.11.0
-branca==0.4.3
+branca==0.8.0
 matplotlib==3.7.2
 tqdm==4.66.1
 shapely==2.0.1
