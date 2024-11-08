@@ -110,11 +110,11 @@ async def process_batch(session, batch, cache, solar_data):
 async def create_india_solar_map_async(geojson_path='india-soi.geojson'):
     logger.info(f"Reading GeoJSON file from: {geojson_path}")
     india = gpd.read_file(geojson_path)
-    india_proj = india.to_crs('EPSG:24370')  # Asia South Albers Equal Area Conic
+    india_proj = india.to_crs('EPSG:32644')  # India Albers Equal Area Conic
     bounds = india_proj.total_bounds
     logger.info(f"Projected bounds: {bounds}")
 
-    resolution = 10000  # 10 km resolution
+    resolution = 5000  # 5 km resolution
     width = int((bounds[2] - bounds[0]) / resolution)
     height = int((bounds[3] - bounds[1]) / resolution)
     logger.info(f"Grid resolution set to {resolution} meters.")
@@ -159,14 +159,6 @@ async def create_india_solar_map_async(geojson_path='india-soi.geojson'):
         logger.error(f"Error during spatial 'within' operation: {e}")
         raise
 
-    try:
-        logger.info("Converting valid points to WGS84 CRS.")
-        valid_points_wgs84 = valid_points.to_crs('EPSG:4326')
-        logger.info("Conversion to WGS84 completed.")
-    except Exception as e:
-        logger.error(f"Error converting CRS: {e}")
-        raise
-
     cache = dc.Cache('nasa_power_cache')
     connector = aiohttp.TCPConnector(limit=100)  # Adjusted for higher concurrency
     timeout = aiohttp.ClientTimeout(total=60)
@@ -174,12 +166,12 @@ async def create_india_solar_map_async(geojson_path='india-soi.geojson'):
     solar_data = []
 
     BATCH_SIZE = 1000  # Define an appropriate batch size
-    total_points = len(valid_points_wgs84)
+    total_points = len(valid_points)
     logger.info(f"Total valid points to process: {total_points}")
 
     async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
         for i in range(0, total_points, BATCH_SIZE):
-            batch = valid_points_wgs84.iloc[i:i+BATCH_SIZE]
+            batch = valid_points.iloc[i:i+BATCH_SIZE]
             logger.info(f"Processing batch {i//BATCH_SIZE + 1}/{(total_points + BATCH_SIZE - 1)//BATCH_SIZE}")
             await process_batch(session, batch, cache, solar_data)
             logger.info(f"Completed batch {i//BATCH_SIZE + 1}/{(total_points + BATCH_SIZE - 1)//BATCH_SIZE}")
@@ -187,7 +179,7 @@ async def create_india_solar_map_async(geojson_path='india-soi.geojson'):
     cache.close()
     logger.info("Data collection completed.")
 
-        # Create DataFrame and convert to GeoDataFrame
+    # Create DataFrame and convert to GeoDataFrame
     solar_df = pd.DataFrame(solar_data)
     solar_gdf = gpd.GeoDataFrame(
         solar_df,
@@ -222,7 +214,7 @@ async def create_india_solar_map_async(geojson_path='india-soi.geojson'):
     logger.info("Applied boundary mask to raster data.")
 
     # Create visualization
-    fig, ax = plt.subplots(figsize=(20, 24))
+    fig, ax = plt.subplots(figsize=(20, 20))
     ax.set_axis_off()
 
     # Create colormap
@@ -237,7 +229,7 @@ async def create_india_solar_map_async(geojson_path='india-soi.geojson'):
     # Plot the raster
     img = ax.imshow(
         raster_data,
-        extent=[bounds[0], bounds[2], bounds[1], bounds[3]],
+        extent=india_proj.total_bounds,
         cmap=ListedColormap(colormap.colors),
         origin='lower'
     )
