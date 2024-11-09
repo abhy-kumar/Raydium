@@ -1,109 +1,64 @@
-name: Run Raydium Solar Map Generation
+name: Collect and Visualize Solar Data
+
+# Trigger the workflow on pushes to the main branch and daily at midnight UTC
 on:
-  workflow_dispatch:
+  push:
+    branches:
+      - main
+  schedule:
+    - cron: '0 0 * * *'  # Every day at midnight UTC
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v3
 
+    steps:
+      # 1. Checkout the repository
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          persist-credentials: true  # This is the default and allows pushing back to the repo
+
+      # 2. Set up Python environment
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.10'
+          python-version: '3.10'  # Specify your Python version
 
-      # Install GDAL dependencies first
-      - name: Install GDAL dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gdal-bin libgdal-dev python3-gdal
-
-      # Get GDAL version and set environment variables
-      - name: Set GDAL environment variables
-        run: |
-          export GDAL_VERSION=$(gdal-config --version)
-          export CPLUS_INCLUDE_PATH=/usr/include/gdal
-          export C_INCLUDE_PATH=/usr/include/gdal
-          echo "GDAL_VERSION=$GDAL_VERSION" >> $GITHUB_ENV
-          echo "CPLUS_INCLUDE_PATH=$CPLUS_INCLUDE_PATH" >> $GITHUB_ENV
-          echo "C_INCLUDE_PATH=$C_INCLUDE_PATH" >> $GITHUB_ENV
-
-      - name: Cache pip dependencies
-        uses: actions/cache@v3
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
-
-      - name: Cache NASA POWER data
-        uses: actions/cache@v3
-        with:
-          path: nasa_power_cache
-          key: ${{ runner.os }}-nasa_power_cache-${{ hashFiles('**/raydium.py') }}
-          restore-keys: |
-            ${{ runner.os }}-nasa_power_cache-
-
-      # Install dependencies in the correct order
-      - name: Install Dependencies
+      # 3. Install dependencies
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install wheel setuptools
-          pip install GDAL==$(gdal-config --version)
-          pip install fiona==1.9.4
           pip install -r requirements.txt
 
-      - name: Verify 'india-soi.geojson' Presence
+      # 4. Run the solar data collection script
+      - name: Run collect_solar_data.py
         run: |
-          if [ -f india-soi.geojson ]; then
-            echo "'india-soi.geojson' found."
-          else
-            echo "'india-soi.geojson' not found. Please ensure it exists in the repository root."
-            exit 1
-          fi
+          python collect_solar_data.py
 
-      - name: List Files Before Script Execution
-        run: |
-          echo "Listing files before running the script:"
-          ls -la
-
-      - name: Run Python Script
-        run: |
-          echo "Executing raydium.py..."
-          python raydium.py
-
-      - name: List Files After Script Execution
-        run: |
-          echo "Listing files after running the script:"
-          ls -la
-
-      - name: Display log file
-        if: always()  # Changed to always() to see logs even if script fails
-        run: |
-          if [ -f "solar_map.log" ]; then
-            echo "Displaying solar_map.log contents:"
-            cat solar_map.log
-          else
-            echo "solar_map.log does not exist."
-          fi
-
-      - name: Configure Git
+      # 5. Commit and push the generated solar data CSV
+      - name: Commit solar data
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add india_solar_data.csv
+          git diff --quiet && git diff --staged --quiet || git commit -m "Update solar data [skip ci]"
+          git push
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Add Output Files
+      # 6. Run the visualization script
+      - name: Run visualize_solar_data.py
         run: |
-          git add india_solar_potential.html india_solar_data.csv solar_potential_high_res.png solar_map.log || echo "No output files to add."
+          python visualize_solar_data.py
 
-      - name: Commit Changes
+      # 7. Commit and push the visualization outputs
+      - name: Commit visualization files
         run: |
-          git commit -m "Update solar map outputs via GitHub Actions" || echo "No changes to commit"
-
-      - name: Push Changes
-        uses: ad-m/github-push-action@v0.6.0
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          branch: ${{ github.ref }}
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add solar_potential_high_res.png india_solar_potential.html
+          git diff --quiet && git diff --staged --quiet || git commit -m "Update solar visualization [skip ci]"
+          git push
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
