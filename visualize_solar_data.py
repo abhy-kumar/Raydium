@@ -18,7 +18,10 @@ def create_solar_map(solar_data_path='india_solar_data.csv', geojson_path='india
     # Load and prepare data
     logger.info("Loading data...")
     solar_df = pd.read_csv(solar_data_path)
+    logger.info(f"Solar Data Rows: {len(solar_df)}")
     india = gpd.read_file(geojson_path)
+    logger.info(f"India GeoJSON CRS: {india.crs}")
+    logger.info(f"Number of Geometries: {len(india)}")
     
     # Ensure input data is in WGS84
     if india.crs != 'EPSG:4326':
@@ -30,10 +33,12 @@ def create_solar_map(solar_data_path='india_solar_data.csv', geojson_path='india
         geometry=[Point(xy) for xy in zip(solar_df.longitude, solar_df.latitude)],
         crs='EPSG:4326'
     )
+    logger.info(f"Solar GeoDataFrame CRS: {solar_gdf.crs}")
+    logger.info(f"Solar Points Total Bounds: {solar_gdf.total_bounds}")
     
-    # Project to UTM for accurate distance calculations
-    india_proj = india.to_crs('EPSG:32644')
-    solar_gdf_proj = solar_gdf.to_crs('EPSG:32644')
+    # Project to Web Mercator for broader coverage
+    india_proj = india.to_crs('EPSG:3857')
+    solar_gdf_proj = solar_gdf.to_crs('EPSG:3857')
     
     # Calculate bounds and create raster
     bounds = india_proj.total_bounds
@@ -42,22 +47,29 @@ def create_solar_map(solar_data_path='india_solar_data.csv', geojson_path='india
     height = int((bounds[3] - bounds[1]) / resolution)
     transform = from_bounds(bounds[0], bounds[1], bounds[2], bounds[3], width, height)
     
-    logger.info(f"Creating raster with dimensions {width}x{height}")
+    logger.info(f"Raster Dimensions: {width}x{height}")
     
     # Initialize raster
-    raster_data = np.zeros((height, width), dtype=np.float32)
-    raster_data[:] = np.nan
+    raster_data = np.full((height, width), np.nan, dtype=np.float32)
     
     # Populate raster with data points
+    populated = 0
     for idx, row in solar_gdf_proj.iterrows():
         col_float, row_float = ~transform * (row.geometry.x, row.geometry.y)
         col, row_idx = int(col_float), int(row_float)
         if 0 <= row_idx < height and 0 <= col < width:
             raster_data[row_idx, col] = row['potential']
+            populated += 1
+    logger.info(f"Populated Pixels: {populated} out of {len(solar_gdf_proj)}")
+    
+    if populated == 0:
+        logger.error("No data points were mapped to the raster. Check input data and projections.")
+        return
     
     # Create and apply mask for India's boundaries
     geometry = [feature['geometry'] for feature in india_proj.__geo_interface__['features']]
     mask_raster = geometry_mask(geometry, out_shape=(height, width), transform=transform, invert=True)
+    logger.info(f"Mask Applied. Number of True Pixels: {np.sum(mask_raster)}")
     
     # Apply mask and smooth data
     raster_data = np.ma.masked_array(raster_data, ~mask_raster)
@@ -66,16 +78,20 @@ def create_solar_map(solar_data_path='india_solar_data.csv', geojson_path='india
     smoothed_data = gaussian_filter(raster_data.filled(np.nan), sigma=2)
     smoothed_masked = np.ma.masked_array(smoothed_data, ~mask_raster)
     
+    if np.all(np.isnan(smoothed_masked)):
+        logger.error("Smoothed data contains only NaNs. Cannot create visualization.")
+        return
+    
     # Create high-resolution plot
     logger.info("Creating visualization...")
     fig, ax = plt.subplots(figsize=(20, 20), dpi=300)
     ax.set_axis_off()
     
-    # Use viridis-like colormap for better visualization
     # Calculate min and max values properly
     vmin = float(np.nanmin(smoothed_masked))
     vmax = float(np.nanmax(smoothed_masked))
-
+    logger.info(f"Visualization Vmin: {vmin}, Vmax: {vmax}")
+    
     # Create colormap with properly sorted values
     colormap = cm.LinearColormap(
         colors=['#440154', '#482878', '#3E4989', '#31688E', '#26828E',
@@ -84,7 +100,6 @@ def create_solar_map(solar_data_path='india_solar_data.csv', geojson_path='india
         vmax=vmax,
         caption='Solar Potential (kWh/m²/year)'
     )
-
     
     # Plot raster data
     img = ax.imshow(
@@ -109,8 +124,11 @@ def create_solar_map(solar_data_path='india_solar_data.csv', geojson_path='india
     
     # Create interactive Folium map
     logger.info("Creating interactive map...")
-    center_lat = (india.total_bounds[1] + india.total_bounds[3]) / 2
-    center_lon = (india.total_bounds[0] + india.total_bounds[2]) / 2
+    
+    # Convert bounds back to latitude and longitude for Folium
+    india_bounds_latlon = india.to_crs('EPSG:4326').total_bounds
+    center_lat = (india_bounds_latlon[1] + india_bounds_latlon[3]) / 2
+    center_lon = (india_bounds_latlon[0] + india_bounds_latlon[2]) / 2
     
     m = folium.Map(
         location=[center_lat, center_lon],
@@ -120,8 +138,8 @@ def create_solar_map(solar_data_path='india_solar_data.csv', geojson_path='india
     
     # Add image overlay
     img_bounds = [
-        [india.total_bounds[1], india.total_bounds[0]],
-        [india.total_bounds[3], india.total_bounds[2]]
+        [india_bounds_latlon[1], india_bounds_latlon[0]],
+        [india_bounds_latlon[3], india_bounds_latlon[2]]
     ]
     
     folium.raster_layers.ImageOverlay(
