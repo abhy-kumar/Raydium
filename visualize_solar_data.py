@@ -72,13 +72,19 @@ def create_solar_map(solar_data_path='india_solar_data.csv', geojson_path='india
     ax.set_axis_off()
     
     # Use viridis-like colormap for better visualization
+    # Calculate min and max values properly
+    vmin = float(np.nanmin(smoothed_masked))
+    vmax = float(np.nanmax(smoothed_masked))
+
+    # Create colormap with properly sorted values
     colormap = cm.LinearColormap(
-        ['#440154', '#482878', '#3E4989', '#31688E', '#26828E',
-         '#1F9E89', '#35B779', '#6DCD59', '#B4DE2C', '#FDE725'],
-        vmin=np.nanmin(smoothed_masked),
-        vmax=np.nanmax(smoothed_masked),
+        colors=['#440154', '#482878', '#3E4989', '#31688E', '#26828E',
+                '#1F9E89', '#35B779', '#6DCD59', '#B4DE2C', '#FDE725'],
+        vmin=vmin,
+        vmax=vmax,
         caption='Solar Potential (kWh/m²/year)'
     )
+
     
     # Plot raster data
     img = ax.imshow(
