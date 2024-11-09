@@ -1,3 +1,5 @@
+import os
+import fiona
 import asyncio
 import aiohttp
 import geopandas as gpd
@@ -106,24 +108,42 @@ async def process_grid_points(grid_points, batch_size=50):
     return solar_data
 
 def create_grid_points(geojson_path='india-soi.geojson', resolution=5000):
-    india = gpd.read_file(geojson_path)
-    india_proj = india.to_crs('EPSG:32644')
-    bounds = india_proj.total_bounds
+    try:
+        # First, verify the file exists
+        if not os.path.exists(geojson_path):
+            logger.error(f"GeoJSON file not found: {geojson_path}")
+            raise FileNotFoundError(f"GeoJSON file not found: {geojson_path}")
+            
+        # Try reading with fiona first to check if the file is valid
+        import fiona
+        with fiona.open(geojson_path) as src:
+            logger.info(f"Successfully opened GeoJSON with {len(src)} features")
+        
+        # Now read with geopandas
+        india = gpd.read_file(geojson_path)
+        logger.info(f"Successfully loaded GeoJSON with shape: {india.shape}")
+        
+        india_proj = india.to_crs('EPSG:32644')
+        bounds = india_proj.total_bounds
 
-    width = int((bounds[2] - bounds[0]) / resolution)
-    height = int((bounds[3] - bounds[1]) / resolution)
+        width = int((bounds[2] - bounds[0]) / resolution)
+        height = int((bounds[3] - bounds[1]) / resolution)
 
-    x_coords = np.linspace(bounds[0], bounds[2], width)
-    y_coords = np.linspace(bounds[1], bounds[3], height)
-    xx, yy = np.meshgrid(x_coords, y_coords)
+        x_coords = np.linspace(bounds[0], bounds[2], width)
+        y_coords = np.linspace(bounds[1], bounds[3], height)
+        xx, yy = np.meshgrid(x_coords, y_coords)
 
-    points = [Point(x, y) for x, y in zip(xx.flatten(), yy.flatten())]
-    grid_gdf = gpd.GeoDataFrame(geometry=points, crs=india_proj.crs)
-    
-    india_union = india_proj.unary_union
-    valid_points = grid_gdf[grid_gdf.within(india_union)]
-    
-    return valid_points.to_crs('EPSG:4326')
+        points = [Point(x, y) for x, y in zip(xx.flatten(), yy.flatten())]
+        grid_gdf = gpd.GeoDataFrame(geometry=points, crs=india_proj.crs)
+        
+        india_union = india_proj.unary_union
+        valid_points = grid_gdf[grid_gdf.within(india_union)]
+        
+        return valid_points.to_crs('EPSG:4326')
+        
+    except Exception as e:
+        logger.error(f"Error in create_grid_points: {str(e)}")
+        raise
 
 async def main():
     try:
