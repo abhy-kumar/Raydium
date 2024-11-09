@@ -109,38 +109,34 @@ async def process_grid_points(grid_points, batch_size=50):
 
 def create_grid_points(geojson_path='india-soi.geojson', resolution=10000, chunk_size=100):
     try:
-        # First, verify the file exists
+        # Load and verify the GeoJSON
         if not os.path.exists(geojson_path):
-            logger.error(f"GeoJSON file not found: {geojson_path}")
             raise FileNotFoundError(f"GeoJSON file not found: {geojson_path}")
             
-        # Try reading with fiona first to check if the file is valid
-        with fiona.open(geojson_path) as src:
-            logger.info(f"Successfully opened GeoJSON with {len(src)} features")
-        
-        # Now read with geopandas
         india = gpd.read_file(geojson_path)
-        logger.info(f"Successfully loaded GeoJSON with shape: {india.shape}")
         
-        # Project to UTM zone 44N (appropriate for India)
+        # Ensure input geometry is in WGS84
+        if india.crs != 'EPSG:4326':
+            india = india.to_crs('EPSG:4326')
+            
+        # Project to an appropriate UTM zone for India
+        # Using UTM zone 44N which is suitable for most of India
         india_proj = india.to_crs('EPSG:32644')
         bounds = india_proj.total_bounds
-        logger.info(f"Bounds in projected CRS: {bounds}")
-
+        
         # Calculate grid dimensions
         width = int((bounds[2] - bounds[0]) / resolution)
         height = int((bounds[3] - bounds[1]) / resolution)
-        logger.info(f"Grid dimensions: {width}x{height} = {width*height} points before filtering")
-
-        # Pre-compute the geometry for boundary checking
-        logger.info("Computing boundary geometry...")
-        india_union = india_proj.unary_union
-        logger.info("Boundary geometry computed")
-
+        
+        # Pre-compute the boundary geometry with buffer
+        # Adding a small negative buffer to ensure points are well within boundaries
+        india_union = india_proj.unary_union.buffer(-resolution/10)
+        
         valid_points = []
         total_processed = 0
         total_valid = 0
 
+        # Generate points in chunks
         for i in range(0, width, chunk_size):
             chunk_start_x = bounds[0] + i * resolution
             chunk_end_x = min(bounds[0] + (i + chunk_size) * resolution, bounds[2])
@@ -149,53 +145,53 @@ def create_grid_points(geojson_path='india-soi.geojson', resolution=10000, chunk
                 chunk_start_y = bounds[1] + j * resolution
                 chunk_end_y = min(bounds[1] + (j + chunk_size) * resolution, bounds[3])
                 
-                logger.info(f"Processing chunk ({i}/{width}, {j}/{height})")
+                # Create points for this chunk
+                x_coords = np.linspace(chunk_start_x, chunk_end_x, 
+                                     min(chunk_size, int((chunk_end_x-chunk_start_x)/resolution)))
+                y_coords = np.linspace(chunk_start_y, chunk_end_y, 
+                                     min(chunk_size, int((chunk_end_y-chunk_start_y)/resolution)))
                 
-                # Create points for this chunk using a list comprehension
-                points = []
-                for x in np.linspace(chunk_start_x, chunk_end_x, 
-                                   min(chunk_size, int((chunk_end_x-chunk_start_x)/resolution))):
-                    for y in np.linspace(chunk_start_y, chunk_end_y, 
-                                       min(chunk_size, int((chunk_end_y-chunk_start_y)/resolution))):
-                        points.append(Point(x, y))
+                # Create mesh grid
+                xx, yy = np.meshgrid(x_coords, y_coords)
+                points = [Point(x, y) for x, y in zip(xx.ravel(), yy.ravel())]
                 
                 total_processed += len(points)
-                logger.info(f"Created {len(points)} points in current chunk")
                 
                 # Create GeoDataFrame for the chunk
                 chunk_gdf = gpd.GeoDataFrame(geometry=points, crs=india_proj.crs)
                 
-                # Use spatial index for faster filtering
-                valid_chunk_points = chunk_gdf[chunk_gdf.geometry.intersects(india_union)]
-                valid_points.append(valid_chunk_points)
+                # Use contains instead of intersects for stricter filtering
+                valid_chunk_points = chunk_gdf[chunk_gdf.geometry.within(india_union)]
                 
-                total_valid += len(valid_chunk_points)
-                logger.info(f"Chunk added {len(valid_chunk_points)} valid points. Total valid: {total_valid}/{total_processed}")
-
-                # Optional: Save progress periodically
-                if total_valid > 0 and total_valid % 10000 == 0:
-                    temp_result = pd.concat(valid_points)
-                    temp_result.to_crs('EPSG:4326').to_csv(f'grid_points_temp_{total_valid}.csv', index=False)
-                    logger.info(f"Saved progress at {total_valid} points")
-
-        # Combine all valid points
+                if len(valid_chunk_points) > 0:
+                    valid_points.append(valid_chunk_points)
+                    total_valid += len(valid_chunk_points)
+                    
+                    # Save progress periodically
+                    if total_valid % 10000 == 0:
+                        temp_result = pd.concat(valid_points)
+                        temp_result_wgs84 = temp_result.to_crs('EPSG:4326')
+                        temp_result_wgs84.to_csv(f'grid_points_temp_{total_valid}.csv', index=False)
+                        
         if not valid_points:
-            logger.error("No valid points found")
             raise ValueError("No valid points found within India's boundary")
             
+        # Combine all valid points
         result = pd.concat(valid_points)
-        logger.info(f"Final valid points: {len(result)}")
         
-        # Convert back to WGS84
+        # Convert back to WGS84 for final output
         result_wgs84 = result.to_crs('EPSG:4326')
-        logger.info("Conversion to WGS84 completed")
         
-        return result_wgs84
+        # Add final validation step
+        india_wgs84 = india.to_crs('EPSG:4326')
+        final_points = result_wgs84[result_wgs84.geometry.within(india_wgs84.unary_union)]
+        
+        return final_points
         
     except Exception as e:
         logger.error(f"Error in create_grid_points: {str(e)}")
         raise
-
+    
 async def main():
     try:
         # Using a larger resolution (20km) for initial testing
