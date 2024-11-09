@@ -107,7 +107,7 @@ async def process_grid_points(grid_points, batch_size=50):
     cache.close()
     return solar_data
 
-def create_grid_points(geojson_path='india-soi.geojson', resolution=5000):
+def create_grid_points(geojson_path='india-soi.geojson', resolution=5000, chunk_size=1000):
     try:
         # First, verify the file exists
         if not os.path.exists(geojson_path):
@@ -115,7 +115,6 @@ def create_grid_points(geojson_path='india-soi.geojson', resolution=5000):
             raise FileNotFoundError(f"GeoJSON file not found: {geojson_path}")
             
         # Try reading with fiona first to check if the file is valid
-        import fiona
         with fiona.open(geojson_path) as src:
             logger.info(f"Successfully opened GeoJSON with {len(src)} features")
         
@@ -125,21 +124,52 @@ def create_grid_points(geojson_path='india-soi.geojson', resolution=5000):
         
         india_proj = india.to_crs('EPSG:32644')
         bounds = india_proj.total_bounds
+        logger.info(f"Bounds in projected CRS: {bounds}")
 
         width = int((bounds[2] - bounds[0]) / resolution)
         height = int((bounds[3] - bounds[1]) / resolution)
+        logger.info(f"Grid dimensions: {width}x{height} = {width*height} points before filtering")
 
-        x_coords = np.linspace(bounds[0], bounds[2], width)
-        y_coords = np.linspace(bounds[1], bounds[3], height)
-        xx, yy = np.meshgrid(x_coords, y_coords)
-
-        points = [Point(x, y) for x, y in zip(xx.flatten(), yy.flatten())]
-        grid_gdf = gpd.GeoDataFrame(geometry=points, crs=india_proj.crs)
-        
+        # Process in chunks to avoid memory issues
+        valid_points = []
         india_union = india_proj.unary_union
-        valid_points = grid_gdf[grid_gdf.within(india_union)]
+
+        for i in range(0, width, chunk_size):
+            chunk_start = bounds[0] + i * resolution
+            chunk_end = min(bounds[0] + (i + chunk_size) * resolution, bounds[2])
+            
+            for j in range(0, height, chunk_size):
+                y_start = bounds[1] + j * resolution
+                y_end = min(bounds[1] + (j + chunk_size) * resolution, bounds[3])
+                
+                logger.info(f"Processing chunk ({i}/{width}, {j}/{height})")
+                
+                # Create smaller meshgrid for this chunk
+                x_coords = np.linspace(chunk_start, chunk_end, 
+                                     min(chunk_size, int((chunk_end-chunk_start)/resolution)))
+                y_coords = np.linspace(y_start, y_end, 
+                                     min(chunk_size, int((y_end-y_start)/resolution)))
+                xx, yy = np.meshgrid(x_coords, y_coords)
+                
+                # Create points for this chunk
+                chunk_points = [Point(x, y) for x, y in zip(xx.flatten(), yy.flatten())]
+                chunk_gdf = gpd.GeoDataFrame(geometry=chunk_points, crs=india_proj.crs)
+                
+                # Filter points within India's boundary
+                valid_chunk_points = chunk_gdf[chunk_gdf.within(india_union)]
+                valid_points.append(valid_chunk_points)
+                
+                logger.info(f"Chunk added {len(valid_chunk_points)} valid points")
+
+        # Combine all valid points
+        if not valid_points:
+            logger.error("No valid points found")
+            raise ValueError("No valid points found within India's boundary")
+            
+        result = pd.concat(valid_points)
+        logger.info(f"Total valid points: {len(result)}")
         
-        return valid_points.to_crs('EPSG:4326')
+        return result.to_crs('EPSG:4326')
         
     except Exception as e:
         logger.error(f"Error in create_grid_points: {str(e)}")
@@ -147,7 +177,8 @@ def create_grid_points(geojson_path='india-soi.geojson', resolution=5000):
 
 async def main():
     try:
-        grid_points = create_grid_points()
+        # Adjust resolution if needed (e.g., 10000 for 10km resolution)
+        grid_points = create_grid_points(resolution=10000, chunk_size=100)
         logger.info(f"Created {len(grid_points)} grid points")
         
         solar_data = await process_grid_points(grid_points)
@@ -157,6 +188,6 @@ async def main():
         
     except Exception as e:
         logger.error(f"Error in main: {e}")
-
+        
 if __name__ == "__main__":
     asyncio.run(main())
