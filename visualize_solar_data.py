@@ -49,17 +49,26 @@ def create_solar_map(solar_data_path='india_solar_data.csv', geojson_path='india
     
     logger.info(f"Raster Dimensions: {width}x{height}")
     
-    # Initialize raster
-    raster_data = np.full((height, width), np.nan, dtype=np.float32)
+    # Initialize raster with zeros instead of NaN
+    raster_data = np.zeros((height, width), dtype=np.float32)
     
-    # Populate raster with data points
+    # Create weight matrix for averaging multiple points in same cell
+    weight_matrix = np.zeros((height, width), dtype=np.float32)
+    
+    # Populate raster with data points using weighted averaging
     populated = 0
     for idx, row in solar_gdf_proj.iterrows():
         col_float, row_float = ~transform * (row.geometry.x, row.geometry.y)
         col, row_idx = int(col_float), int(row_float)
         if 0 <= row_idx < height and 0 <= col < width:
-            raster_data[row_idx, col] = row['potential']
+            raster_data[row_idx, col] += row['potential']
+            weight_matrix[row_idx, col] += 1
             populated += 1
+    
+    # Average values where multiple points exist
+    mask = weight_matrix > 0
+    raster_data[mask] = raster_data[mask] / weight_matrix[mask]
+    
     logger.info(f"Populated Pixels: {populated} out of {len(solar_gdf_proj)}")
     
     if populated == 0:
@@ -71,15 +80,19 @@ def create_solar_map(solar_data_path='india_solar_data.csv', geojson_path='india
     mask_raster = geometry_mask(geometry, out_shape=(height, width), transform=transform, invert=True)
     logger.info(f"Mask Applied. Number of True Pixels: {np.sum(mask_raster)}")
     
-    # Apply mask and smooth data
+    # Apply mask
     raster_data = np.ma.masked_array(raster_data, ~mask_raster)
     
     # Apply Gaussian smoothing to fill gaps
-    smoothed_data = gaussian_filter(raster_data.filled(np.nan), sigma=2)
+    # Fill masked values with nearest neighbor before smoothing
+    filled_data = raster_data.filled(0)  # Fill with 0 instead of NaN
+    smoothed_data = gaussian_filter(filled_data, sigma=2)
+    
+    # Reapply the mask after smoothing
     smoothed_masked = np.ma.masked_array(smoothed_data, ~mask_raster)
     
-    if np.all(np.isnan(smoothed_masked)):
-        logger.error("Smoothed data contains only NaNs. Cannot create visualization.")
+    if np.all(smoothed_masked.mask):
+        logger.error("Smoothed data contains only masked values. Cannot create visualization.")
         return
     
     # Create high-resolution plot
@@ -88,8 +101,13 @@ def create_solar_map(solar_data_path='india_solar_data.csv', geojson_path='india
     ax.set_axis_off()
     
     # Calculate min and max values properly
-    vmin = float(np.nanmin(smoothed_masked))
-    vmax = float(np.nanmax(smoothed_masked))
+    valid_data = smoothed_masked.compressed()  # Get only valid (non-masked) data
+    if len(valid_data) == 0:
+        logger.error("No valid data points after masking.")
+        return
+        
+    vmin = float(np.percentile(valid_data, 1))  # Use 1st percentile instead of minimum
+    vmax = float(np.percentile(valid_data, 99))  # Use 99th percentile instead of maximum
     logger.info(f"Visualization Vmin: {vmin}, Vmax: {vmax}")
     
     # Create colormap with properly sorted values
@@ -107,7 +125,9 @@ def create_solar_map(solar_data_path='india_solar_data.csv', geojson_path='india
         extent=india_proj.total_bounds,
         cmap=ListedColormap(colormap.colors),
         origin='lower',
-        interpolation='bilinear'  # Add interpolation for smoother appearance
+        interpolation='bilinear',
+        vmin=vmin,
+        vmax=vmax
     )
     
     # Add boundary outline
@@ -154,7 +174,7 @@ def create_solar_map(solar_data_path='india_solar_data.csv', geojson_path='india
     
     # Add boundary overlay
     folium.GeoJson(
-        india.__geo_interface__,  # Use geo_interface for better compatibility
+        india.__geo_interface__,
         style_function=lambda x: {
             'fillColor': 'none',
             'color': 'black',
