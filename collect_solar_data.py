@@ -203,107 +203,125 @@ async def process_grid_points(grid_points, batch_size=50):
     cache.close()
     return solar_data
 
-def create_grid_points(geojson_path='india-soi.geojson', resolution=10000, chunk_size=100):
+def create_grid_points(geojson_path='india-soi.geojson', resolution=10000):
+    """
+    Create a grid of points within India's boundary with improved geometry handling.
+    """
     try:
-        if not os.path.exists(geojson_path):
-            raise FileNotFoundError(f"GeoJSON file not found: {geojson_path}")
-            
+        # Load and verify the input geometry
         india = gpd.read_file(geojson_path)
+        logger.info(f"Initial CRS: {india.crs}")
         
-        # Ensure input geometry is in WGS84
+        # Force to WGS84
         if india.crs != 'EPSG:4326':
             india = india.to_crs('EPSG:4326')
+            logger.info("Converted to WGS84")
         
-        # Use a more appropriate projection for India
-        # Using Indian Grid (EPSG:24378) for better accuracy
-        india_proj = india.to_crs('EPSG:24378')
-        bounds = india_proj.total_bounds
+        # Buffer and simplify the geometry slightly to handle any topology issues
+        india_geom = india.geometry.buffer(0).unary_union
+        logger.info(f"Geometry valid: {india_geom.is_valid}")
+        logger.info(f"Geometry type: {india_geom.geom_type}")
         
-        # Calculate grid dimensions
-        width = int((bounds[2] - bounds[0]) / resolution)
-        height = int((bounds[3] - bounds[1]) / resolution)
+        # Get bounds
+        bounds = india_geom.bounds
+        logger.info(f"Bounds: {bounds}")
         
-        # Create hexagonal grid instead of rectangular
-        # This ensures better coverage with fewer points
-        hex_size = resolution * 0.866  # Height of a hexagon
-        hex_width = resolution
+        # Calculate grid spacing in degrees
+        # Convert resolution from meters to degrees (approximately)
+        mid_lat = (bounds[1] + bounds[3]) / 2
+        deg_resolution = resolution / 111000  # 1 degree ≈ 111km at the equator
         
+        # Adjust for latitude
+        lon_resolution = deg_resolution / np.cos(np.radians(mid_lat))
+        
+        logger.info(f"Grid resolution - Lat: {deg_resolution}, Lon: {lon_resolution}")
+        
+        # Generate grid coordinates
+        lons = np.arange(bounds[0], bounds[2], lon_resolution)
+        lats = np.arange(bounds[1], bounds[3], deg_resolution)
+        
+        logger.info(f"Grid size: {len(lons)}x{len(lats)} points")
+        
+        # Create points with progress logging
         valid_points = []
-        total_processed = 0
-        total_valid = 0
-
-        for i in range(width):
-            x = bounds[0] + i * hex_width
-            # Offset every other row
-            offset = (hex_size / 2) if (i % 2) == 0 else 0
-            
-            for j in range(height):
-                y = bounds[1] + j * hex_size + offset
-                point = Point(x, y)
+        total_points = len(lons) * len(lats)
+        processed = 0
+        
+        for lon in lons:
+            for lat in lats:
+                point = Point(lon, lat)
+                processed += 1
                 
-                if india_proj.geometry.contains(point).any():
+                # Use contains() instead of within() for better performance
+                if india_geom.contains(point):
                     valid_points.append(point)
-                    total_valid += 1
                 
-                total_processed += 1
-                
-                if total_valid % 1000 == 0:
-                    logger.info(f"Generated {total_valid} valid points out of {total_processed} total")
+                if processed % 1000 == 0:
+                    logger.info(
+                        f"Processed {processed}/{total_points} points "
+                        f"({(processed/total_points)*100:.1f}%) - "
+                        f"Valid points so far: {len(valid_points)}"
+                    )
         
         if not valid_points:
-            raise ValueError("No valid points found within India's boundary")
+            logger.error("No valid points found!")
+            logger.error(f"Total processed: {processed}")
+            logger.error(f"Grid bounds: {bounds}")
+            # Test a known point within India
+            test_point = Point(77.2, 28.6)  # New Delhi
+            logger.error(f"Test point (Delhi) contained: {india_geom.contains(test_point)}")
+            raise ValueError("No valid points found within boundary")
         
-        # Create GeoDataFrame with all valid points
-        result = gpd.GeoDataFrame(geometry=valid_points, crs=india_proj.crs)
+        # Create GeoDataFrame
+        points_gdf = gpd.GeoDataFrame(
+            geometry=valid_points,
+            crs='EPSG:4326'
+        )
         
-        # Convert back to WGS84
-        result_wgs84 = result.to_crs('EPSG:4326')
+        # Add coordinates as columns
+        points_gdf['latitude'] = points_gdf.geometry.y
+        points_gdf['longitude'] = points_gdf.geometry.x
         
-        # Validate final points
-        india_wgs84 = india.to_crs('EPSG:4326')
-        final_points = result_wgs84[result_wgs84.geometry.within(india_wgs84.unary_union)]
+        logger.info(f"Successfully created {len(points_gdf)} points")
         
-        logger.info(f"Final grid contains {len(final_points)} points")
-        return final_points
+        # Save debug information
+        try:
+            import matplotlib.pyplot as plt
+            fig, ax = plt.subplots(figsize=(15, 15))
+            india.plot(ax=ax, alpha=0.5)
+            points_gdf.plot(ax=ax, color='red', markersize=1)
+            plt.savefig('debug_grid.png')
+            logger.info("Saved debug plot")
+            
+            # Save a few sample points for verification
+            sample_points = points_gdf.head(5)
+            logger.info("Sample points:")
+            for idx, point in sample_points.iterrows():
+                logger.info(f"Point {idx}: ({point.longitude}, {point.latitude})")
+        except Exception as e:
+            logger.warning(f"Could not create debug output: {e}")
+        
+        return points_gdf
         
     except Exception as e:
-        logger.error(f"Error in create_grid_points: {str(e)}")
+        logger.error(f"Error in create_grid_points: {e}")
+        logger.exception("Detailed traceback:")
         raise
 
-async def main():
+def main():
     try:
-        # Create output directory if it doesn't exist
         os.makedirs('output', exist_ok=True)
+        grid_points = create_grid_points(resolution=15000)
         
-        # Using 15km resolution for better coverage
-        grid_points = create_grid_points(resolution=15000, chunk_size=50)
-        logger.info(f"Created {len(grid_points)} grid points")
-        
-        # Save the grid points before processing
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        grid_points.to_csv(f'output/grid_points_{timestamp}.csv', index=False)
-        logger.info("Saved grid points to CSV")
+        output_file = f'output/grid_points_{timestamp}.csv'
+        grid_points.to_csv(output_file, index=False)
         
-        solar_data = await process_grid_points(grid_points)
-        df = pd.DataFrame(solar_data)
-        
-        # Save final results with timestamp
-        df.to_csv(f'output/india_solar_data_{timestamp}.csv', index=False)
-        
-        # Generate summary statistics
-        summary = {
-            'total_points': len(df),
-            'avg_potential': df['potential'].mean(),
-            'min_potential': df['potential'].min(),
-            'max_potential': df['potential'].max(),
-            'completion_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        }
-        
-        pd.DataFrame([summary]).to_csv(f'output/summary_{timestamp}.csv', index=False)
-        logger.info("Data collection completed successfully")
+        logger.info(f"Saved {len(grid_points)} points to {output_file}")
         
     except Exception as e:
         logger.error(f"Error in main: {e}")
-        
+        logger.exception("Detailed traceback:")
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
