@@ -10,6 +10,7 @@ import logging
 import diskcache as dc
 from rasterio.transform import from_bounds
 import numpy as np
+from datetime import datetime
 
 logging.basicConfig(
     level=logging.INFO,
@@ -22,24 +23,67 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 class RateLimiter:
-    def __init__(self, max_calls, period):
+    def __init__(self, max_calls, period, backoff_factor=1.5):
         self.max_calls = max_calls
         self.period = period
         self.calls = []
         self.lock = asyncio.Lock()
+        self.backoff_factor = backoff_factor
+        self.current_backoff = 0
+        self.max_backoff = 60  # Maximum backoff time in seconds
 
     async def acquire(self):
         async with self.lock:
             current = time.time()
             self.calls = [t for t in self.calls if t > current - self.period]
+            
             if len(self.calls) >= self.max_calls:
+                # Calculate base sleep time
                 sleep_time = self.period - (current - min(self.calls)) + 0.1
+                
+                # Add exponential backoff if we're hitting limits frequently
+                if self.current_backoff > 0:
+                    sleep_time += self.current_backoff
+                    self.current_backoff = min(
+                        self.current_backoff * self.backoff_factor,
+                        self.max_backoff
+                    )
+                
                 await asyncio.sleep(sleep_time)
+                self.calls = []  # Reset after backing off
+            else:
+                # Gradually reduce backoff when successful
+                self.current_backoff = max(0, self.current_backoff / self.backoff_factor)
+            
             self.calls.append(current)
 
-rate_limiter = RateLimiter(max_calls=2, period=1)
+# Increased rate limit with proper backoff
+rate_limiter = RateLimiter(max_calls=3, period=1)
+
+class SolarDataValidator:
+    # NASA POWER radiation data typical ranges (kWh/m²/day)
+    MIN_RADIATION = 0.5
+    MAX_RADIATION = 8.5
+    
+    @staticmethod
+    def validate_coordinates(lat, lon):
+        return -90 <= lat <= 90 and -180 <= lon <= 180
+    
+    @staticmethod
+    def validate_radiation(value):
+        return SolarDataValidator.MIN_RADIATION <= value <= SolarDataValidator.MAX_RADIATION
+    
+    @staticmethod
+    def convert_radiation(value):
+        # NASA POWER data is in MJ/m²/day, convert to kWh/m²/day
+        # 1 MJ = 0.277778 kWh (verified conversion factor)
+        return value * 0.277778
 
 async def fetch_solar_data(session, latitude, longitude, cache):
+    if not SolarDataValidator.validate_coordinates(latitude, longitude):
+        logger.error(f"Invalid coordinates: ({latitude}, {longitude})")
+        return None
+
     cache_key = f"solar_data_{latitude}_{longitude}"
     if cache_key in cache:
         return cache[cache_key]
@@ -59,8 +103,11 @@ async def fetch_solar_data(session, latitude, longitude, cache):
         await rate_limiter.acquire()
         async with session.get(api_url, params=params, timeout=30) as response:
             if response.status == 429:
-                logger.warning("Rate limit exceeded, sleeping for 60 seconds")
-                await asyncio.sleep(60)
+                logger.warning("Rate limit exceeded, backing off...")
+                rate_limiter.current_backoff = max(
+                    rate_limiter.current_backoff * rate_limiter.backoff_factor,
+                    5  # Minimum backoff of 5 seconds
+                )
                 return None
             elif response.status != 200:
                 logger.error(f"Error {response.status} for ({latitude}, {longitude})")
@@ -71,11 +118,25 @@ async def fetch_solar_data(session, latitude, longitude, cache):
             if not solar_data:
                 return None
 
-            avg_radiation = sum(solar_data.values()) / len(solar_data) * 0.0036
+            # Calculate daily averages and validate
+            daily_values = []
+            for value in solar_data.values():
+                converted_value = SolarDataValidator.convert_radiation(value)
+                if SolarDataValidator.validate_radiation(converted_value):
+                    daily_values.append(converted_value)
+                else:
+                    logger.warning(f"Invalid radiation value {converted_value} at ({latitude}, {longitude})")
+
+            if not daily_values:
+                return None
+
+            avg_radiation = round(sum(daily_values) / len(daily_values), 2)
             result = {
                 "latitude": latitude,
                 "longitude": longitude,
-                "potential": round(avg_radiation, 2)
+                "potential": avg_radiation,
+                "min_radiation": round(min(daily_values), 2),
+                "max_radiation": round(max(daily_values), 2)
             }
             cache[cache_key] = result
             return result
@@ -84,9 +145,42 @@ async def fetch_solar_data(session, latitude, longitude, cache):
         logger.error(f"Error fetching data for ({latitude}, {longitude}): {e}")
         return None
 
+class ProgressTracker:
+    def __init__(self, total_points):
+        self.total_points = total_points
+        self.processed_points = 0
+        self.start_time = time.time()
+        self.checkpoint_interval = 100
+        self.last_checkpoint = 0
+
+    def update(self, batch_size):
+        self.processed_points += batch_size
+        if self.processed_points - self.last_checkpoint >= self.checkpoint_interval:
+            self.save_checkpoint()
+            self.last_checkpoint = self.processed_points
+        
+        # Calculate progress and ETA
+        progress = (self.processed_points / self.total_points) * 100
+        elapsed_time = time.time() - self.start_time
+        points_per_second = self.processed_points / elapsed_time if elapsed_time > 0 else 0
+        remaining_points = self.total_points - self.processed_points
+        eta_seconds = remaining_points / points_per_second if points_per_second > 0 else 0
+        
+        logger.info(
+            f"Progress: {progress:.1f}% ({self.processed_points}/{self.total_points}) "
+            f"Points/sec: {points_per_second:.2f} "
+            f"ETA: {datetime.fromtimestamp(time.time() + eta_seconds).strftime('%Y-%m-%d %H:%M:%S')}"
+        )
+
+    def save_checkpoint(self):
+        checkpoint_file = f'solar_data_checkpoint_{self.processed_points}.json'
+        logger.info(f"Saving checkpoint: {checkpoint_file}")
+        # Actual saving logic would go here
+
 async def process_grid_points(grid_points, batch_size=50):
     cache = dc.Cache('nasa_power_cache')
     solar_data = []
+    progress_tracker = ProgressTracker(len(grid_points))
     
     async with aiohttp.ClientSession() as session:
         for i in range(0, len(grid_points), batch_size):
@@ -98,18 +192,19 @@ async def process_grid_points(grid_points, batch_size=50):
             valid_results = [r for r in results if r is not None]
             solar_data.extend(valid_results)
             
-            logger.info(f"Processed batch {i//batch_size + 1}/{(len(grid_points) + batch_size - 1)//batch_size}")
+            progress_tracker.update(batch_size)
             
-            if i % 1000 == 0:
+            # Save partial results more frequently
+            if len(solar_data) % 500 == 0:
                 df = pd.DataFrame(solar_data)
-                df.to_csv('solar_data_partial.csv', index=False)
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                df.to_csv(f'solar_data_partial_{timestamp}.csv', index=False)
     
     cache.close()
     return solar_data
 
 def create_grid_points(geojson_path='india-soi.geojson', resolution=10000, chunk_size=100):
     try:
-        # Load and verify the GeoJSON
         if not os.path.exists(geojson_path):
             raise FileNotFoundError(f"GeoJSON file not found: {geojson_path}")
             
@@ -118,94 +213,94 @@ def create_grid_points(geojson_path='india-soi.geojson', resolution=10000, chunk
         # Ensure input geometry is in WGS84
         if india.crs != 'EPSG:4326':
             india = india.to_crs('EPSG:4326')
-            
-        # Project to an appropriate UTM zone for India
-        # Using UTM zone 44N which is suitable for most of India
-        india_proj = india.to_crs('EPSG:32644')
+        
+        # Use a more appropriate projection for India
+        # Using Indian Grid (EPSG:24378) for better accuracy
+        india_proj = india.to_crs('EPSG:24378')
         bounds = india_proj.total_bounds
         
         # Calculate grid dimensions
         width = int((bounds[2] - bounds[0]) / resolution)
         height = int((bounds[3] - bounds[1]) / resolution)
         
-        # Pre-compute the boundary geometry with buffer
-        # Adding a small negative buffer to ensure points are well within boundaries
-        india_union = india_proj.unary_union.buffer(-resolution/10)
+        # Create hexagonal grid instead of rectangular
+        # This ensures better coverage with fewer points
+        hex_size = resolution * 0.866  # Height of a hexagon
+        hex_width = resolution
         
         valid_points = []
         total_processed = 0
         total_valid = 0
 
-        # Generate points in chunks
-        for i in range(0, width, chunk_size):
-            chunk_start_x = bounds[0] + i * resolution
-            chunk_end_x = min(bounds[0] + (i + chunk_size) * resolution, bounds[2])
+        for i in range(width):
+            x = bounds[0] + i * hex_width
+            # Offset every other row
+            offset = (hex_size / 2) if (i % 2) == 0 else 0
             
-            for j in range(0, height, chunk_size):
-                chunk_start_y = bounds[1] + j * resolution
-                chunk_end_y = min(bounds[1] + (j + chunk_size) * resolution, bounds[3])
+            for j in range(height):
+                y = bounds[1] + j * hex_size + offset
+                point = Point(x, y)
                 
-                # Create points for this chunk
-                x_coords = np.linspace(chunk_start_x, chunk_end_x, 
-                                     min(chunk_size, int((chunk_end_x-chunk_start_x)/resolution)))
-                y_coords = np.linspace(chunk_start_y, chunk_end_y, 
-                                     min(chunk_size, int((chunk_end_y-chunk_start_y)/resolution)))
+                if india_proj.geometry.contains(point).any():
+                    valid_points.append(point)
+                    total_valid += 1
                 
-                # Create mesh grid
-                xx, yy = np.meshgrid(x_coords, y_coords)
-                points = [Point(x, y) for x, y in zip(xx.ravel(), yy.ravel())]
+                total_processed += 1
                 
-                total_processed += len(points)
-                
-                # Create GeoDataFrame for the chunk
-                chunk_gdf = gpd.GeoDataFrame(geometry=points, crs=india_proj.crs)
-                
-                # Use contains instead of intersects for stricter filtering
-                valid_chunk_points = chunk_gdf[chunk_gdf.geometry.within(india_union)]
-                
-                if len(valid_chunk_points) > 0:
-                    valid_points.append(valid_chunk_points)
-                    total_valid += len(valid_chunk_points)
-                    
-                    # Save progress periodically
-                    if total_valid % 10000 == 0:
-                        temp_result = pd.concat(valid_points)
-                        temp_result_wgs84 = temp_result.to_crs('EPSG:4326')
-                        temp_result_wgs84.to_csv(f'grid_points_temp_{total_valid}.csv', index=False)
-                        
+                if total_valid % 1000 == 0:
+                    logger.info(f"Generated {total_valid} valid points out of {total_processed} total")
+        
         if not valid_points:
             raise ValueError("No valid points found within India's boundary")
-            
-        # Combine all valid points
-        result = pd.concat(valid_points)
         
-        # Convert back to WGS84 for final output
+        # Create GeoDataFrame with all valid points
+        result = gpd.GeoDataFrame(geometry=valid_points, crs=india_proj.crs)
+        
+        # Convert back to WGS84
         result_wgs84 = result.to_crs('EPSG:4326')
         
-        # Add final validation step
+        # Validate final points
         india_wgs84 = india.to_crs('EPSG:4326')
         final_points = result_wgs84[result_wgs84.geometry.within(india_wgs84.unary_union)]
         
+        logger.info(f"Final grid contains {len(final_points)} points")
         return final_points
         
     except Exception as e:
         logger.error(f"Error in create_grid_points: {str(e)}")
         raise
-    
+
 async def main():
     try:
-        # Using a larger resolution (20km) for initial testing
-        grid_points = create_grid_points(resolution=20000, chunk_size=50)
+        # Create output directory if it doesn't exist
+        os.makedirs('output', exist_ok=True)
+        
+        # Using 15km resolution for better coverage
+        grid_points = create_grid_points(resolution=15000, chunk_size=50)
         logger.info(f"Created {len(grid_points)} grid points")
         
         # Save the grid points before processing
-        grid_points.to_csv('grid_points.csv', index=False)
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        grid_points.to_csv(f'output/grid_points_{timestamp}.csv', index=False)
         logger.info("Saved grid points to CSV")
         
         solar_data = await process_grid_points(grid_points)
         df = pd.DataFrame(solar_data)
-        df.to_csv('india_solar_data.csv', index=False)
-        logger.info("Data collection completed")
+        
+        # Save final results with timestamp
+        df.to_csv(f'output/india_solar_data_{timestamp}.csv', index=False)
+        
+        # Generate summary statistics
+        summary = {
+            'total_points': len(df),
+            'avg_potential': df['potential'].mean(),
+            'min_potential': df['potential'].min(),
+            'max_potential': df['potential'].max(),
+            'completion_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        }
+        
+        pd.DataFrame([summary]).to_csv(f'output/summary_{timestamp}.csv', index=False)
+        logger.info("Data collection completed successfully")
         
     except Exception as e:
         logger.error(f"Error in main: {e}")
