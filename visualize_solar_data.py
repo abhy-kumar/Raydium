@@ -90,11 +90,20 @@ def create_solar_map(solar_data_path='india_solar_data.csv', geojson_path='india
         logger.info(f"Initial vmin (2nd percentile): {vmin}")
         logger.info(f"Initial vmax (98th percentile): {vmax}")
         
-        # Ensure vmin is less than vmax
-        if vmin >= vmax:
-            logger.warning(f"vmin ({vmin}) >= vmax ({vmax}). Adjusting to use min and max of valid data.")
+        # Ensure vmin is less than vmax and both are finite
+        if not (np.isfinite(vmin) and np.isfinite(vmax)):
+            logger.warning("vmin or vmax is not finite. Using min and max of valid data.")
             vmin = float(np.min(valid_data))
             vmax = float(np.max(valid_data))
+        
+        if vmin >= vmax:
+            logger.warning(f"vmin ({vmin}) >= vmax ({vmax}). Adjusting vmax by adding a small epsilon.")
+            vmin = float(np.min(valid_data))
+            vmax = float(np.max(valid_data))
+            if vmin == vmax:
+                epsilon = 1e-6
+                vmax = vmin + epsilon
+                logger.warning(f"vmin and vmax are equal after adjustment. Setting vmax = vmin + epsilon ({vmax}).")
             logger.info(f"Adjusted vmin: {vmin}")
             logger.info(f"Adjusted vmax: {vmax}")
         
