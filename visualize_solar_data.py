@@ -32,12 +32,11 @@ def create_solar_map(solar_data_path='india_solar_data.csv', geojson_path='india
             crs='EPSG:4326'
         )
         
-        # Use Asia South Albers Equal Area projection instead of Web Mercator
-        # This preserves area relationships better for India's latitude
+        # Use Asia South Albers Equal Area projection
         india_proj = india.to_crs('ESRI:102028')
         solar_gdf_proj = solar_gdf.to_crs('ESRI:102028')
         
-        # Calculate bounds and create raster with higher resolution
+        # Calculate bounds and create raster
         bounds = india_proj.total_bounds
         resolution = 2000  # 2km resolution
         width = int((bounds[2] - bounds[0]) / resolution)
@@ -56,7 +55,6 @@ def create_solar_map(solar_data_path='india_solar_data.csv', geojson_path='india
             col, row_idx = int(col), int(row_idx)
             
             if 0 <= row_idx < height and 0 <= col < width:
-                # Use inverse distance weighting for better interpolation
                 raster_data[row_idx, col] += row['potential']
                 weight_matrix[row_idx, col] += 1
         
@@ -72,13 +70,13 @@ def create_solar_map(solar_data_path='india_solar_data.csv', geojson_path='india
         # Apply mask
         raster_data = np.ma.masked_array(raster_data, ~mask_raster)
         
-        # Apply gentler smoothing
+        # Apply smoothing
         logger.info("Applying Gaussian filter for smoothing...")
         filled_data = raster_data.filled(np.nan)
         smoothed_data = gaussian_filter(filled_data, sigma=1)
         smoothed_masked = np.ma.masked_array(smoothed_data, ~mask_raster)
         
-        # Calculate proper value ranges using percentiles
+        # Calculate value ranges using percentiles
         logger.info("Calculating percentile-based vmin and vmax...")
         valid_data = smoothed_masked.compressed()
         
@@ -92,7 +90,7 @@ def create_solar_map(solar_data_path='india_solar_data.csv', geojson_path='india
         logger.info(f"Initial vmin (2nd percentile): {vmin}")
         logger.info(f"Initial vmax (98th percentile): {vmax}")
         
-        # Ensure that vmin is less than vmax
+        # Ensure vmin is less than vmax
         if vmin >= vmax:
             logger.warning(f"vmin ({vmin}) >= vmax ({vmax}). Adjusting to use min and max of valid data.")
             vmin = float(np.min(valid_data))
@@ -100,20 +98,15 @@ def create_solar_map(solar_data_path='india_solar_data.csv', geojson_path='india
             logger.info(f"Adjusted vmin: {vmin}")
             logger.info(f"Adjusted vmax: {vmax}")
         
-        # Use a more appropriate colormap for solar radiation
+        # Create colormap for solar radiation
         colors = ['#313695', '#4575b4', '#74add1', '#abd9e9', '#e0f3f8',
-                  '#fee090', '#fdae61', '#f46d43', '#d73027', '#a50026']
+                 '#fee090', '#fdae61', '#f46d43', '#d73027', '#a50026']
         colormap = cm.LinearColormap(
             colors=colors,
             vmin=vmin,
             vmax=vmax,
             caption='Solar Potential (kWh/m²/year)'
         )
-        
-        # Check if colormap thresholds are sorted
-        if not all(x < y for x, y in zip(colormap.color_domain, colormap.color_domain[1:])):
-            logger.error("Colormap thresholds are not sorted. Please check vmin and vmax values.")
-            return
         
         # Create visualization
         logger.info("Creating matplotlib visualization...")
@@ -125,7 +118,7 @@ def create_solar_map(solar_data_path='india_solar_data.csv', geojson_path='india
             smoothed_masked,
             extent=india_proj.total_bounds,
             cmap=ListedColormap(colormap.colors),
-            origin='upper',  # Changed from 'lower' to 'upper'
+            origin='upper',
             interpolation='nearest',
             vmin=vmin,
             vmax=vmax
@@ -146,7 +139,7 @@ def create_solar_map(solar_data_path='india_solar_data.csv', geojson_path='india
                     edgecolor='none')
         plt.close(fig)
         
-        # Create interactive Folium map with correct projection
+        # Create interactive Folium map
         logger.info("Creating interactive Folium map...")
         india_wgs84 = india_proj.to_crs('EPSG:4326')
         bounds_latlon = india_wgs84.total_bounds
@@ -159,7 +152,7 @@ def create_solar_map(solar_data_path='india_solar_data.csv', geojson_path='india
             tiles='CartoDB positron'
         )
         
-        # Add image overlay with correct coordinates
+        # Add image overlay
         img_bounds = [
             [bounds_latlon[1], bounds_latlon[0]],
             [bounds_latlon[3], bounds_latlon[2]]
