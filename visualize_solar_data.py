@@ -4,12 +4,12 @@ import numpy as np
 import folium
 import branca.colormap as cm
 import matplotlib.pyplot as plt
-from matplotlib.colors import ListedColormap
 from rasterio.transform import from_bounds
 from rasterio.features import geometry_mask
 from shapely.geometry import Point
 import logging
 from scipy.ndimage import gaussian_filter
+from branca.colormap import linear
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -107,15 +107,10 @@ def create_solar_map(solar_data_path='india_solar_data.csv', geojson_path='india
             logger.info(f"Adjusted vmin: {vmin}")
             logger.info(f"Adjusted vmax: {vmax}")
         
-        # Create colormap for solar radiation
-        colors = ['#313695', '#4575b4', '#74add1', '#abd9e9', '#e0f3f8',
-                 '#fee090', '#fdae61', '#f46d43', '#d73027', '#a50026']
-        colormap = cm.LinearColormap(
-            colors=colors,
-            vmin=vmin,
-            vmax=vmax,
-            caption='Solar Potential (kWh/m²/year)'
-        )
+        # Create Plasma colormap for solar radiation
+        logger.info("Creating Plasma colormap...")
+        colormap = linear.Plasma_09.scale(vmin, vmax)
+        colormap.caption = 'Solar Potential (kWh/m²/year)'
         
         # Create visualization
         logger.info("Creating matplotlib visualization...")
@@ -126,7 +121,7 @@ def create_solar_map(solar_data_path='india_solar_data.csv', geojson_path='india
         img = ax.imshow(
             smoothed_masked,
             extent=india_proj.total_bounds,
-            cmap=ListedColormap(colormap.colors),
+            cmap=colormap,
             origin='upper',
             interpolation='nearest',
             vmin=vmin,
@@ -189,7 +184,6 @@ def create_solar_map(solar_data_path='india_solar_data.csv', geojson_path='india
             name='India Boundary'
         ).add_to(m)
         
-        # Add colormap and layer control
         colormap.add_to(m)
         folium.LayerControl().add_to(m)
         
