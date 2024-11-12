@@ -308,20 +308,28 @@ def create_grid_points(geojson_path='india-soi.geojson', resolution=15000):
         logger.exception("Detailed traceback:")
         raise
 
-def main():
+async def main():
     try:
-        os.makedirs('output', exist_ok=True)
+        # Step 1: Create grid points
         grid_points = create_grid_points(resolution=15000)
+        logger.info(f"Created {len(grid_points)} grid points")
         
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        # Step 2: Process grid points to get solar data
+        solar_data = await process_grid_points(grid_points)
+        logger.info(f"Collected solar data for {len(solar_data)} points")
+        
+        # Step 3: Create final DataFrame with all data
+        result_df = pd.DataFrame(solar_data)
+        
+        # Step 4: Save results
         output_file = 'india_solar_data.csv'
-        grid_points.to_csv(output_file, index=False)
+        result_df.to_csv(output_file, index=False)
         
-        logger.info(f"Saved {len(grid_points)} points to {output_file}")
+        logger.info(f"Saved complete solar data to {output_file}")
         
     except Exception as e:
         logger.error(f"Error in main: {e}")
         logger.exception("Detailed traceback:")
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())  # Use asyncio.run() to handle the async main function
