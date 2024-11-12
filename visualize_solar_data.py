@@ -9,7 +9,6 @@ from rasterio.features import geometry_mask
 from shapely.geometry import Point
 import logging
 from scipy.ndimage import gaussian_filter
-from branca.colormap import linear
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -97,20 +96,22 @@ def create_solar_map(solar_data_path='india_solar_data.csv', geojson_path='india
             vmax = float(np.max(valid_data))
         
         if vmin >= vmax:
-            logger.warning(f"vmin ({vmin}) >= vmax ({vmax}). Adjusting vmax by adding a small epsilon.")
+            logger.warning(f"vmin ({vmin}) >= vmax ({vmax}). Adjusting vmax.")
             vmin = float(np.min(valid_data))
             vmax = float(np.max(valid_data))
             if vmin == vmax:
                 epsilon = 1e-6
                 vmax = vmin + epsilon
                 logger.warning(f"vmin and vmax are equal after adjustment. Setting vmax = vmin + epsilon ({vmax}).")
-            logger.info(f"Adjusted vmin: {vmin}")
-            logger.info(f"Adjusted vmax: {vmax}")
         
-        # Create Plasma colormap for solar radiation
-        logger.info("Creating Plasma colormap...")
-        colormap = linear.Plasma_09.scale(vmin, vmax)
-        colormap.caption = 'Solar Potential (kWh/m²/year)'
+        # Create colormap using branca's standard colormap
+        logger.info("Creating colormap...")
+        colormap = cm.LinearColormap(
+            colors=['yellow', 'orange', 'red'],
+            vmin=vmin,
+            vmax=vmax,
+            caption='Solar Potential (kWh/m²/year)'
+        )
         
         # Create visualization
         logger.info("Creating matplotlib visualization...")
@@ -121,7 +122,7 @@ def create_solar_map(solar_data_path='india_solar_data.csv', geojson_path='india
         img = ax.imshow(
             smoothed_masked,
             extent=india_proj.total_bounds,
-            cmap=colormap,
+            cmap='plasma',  # Using matplotlib's plasma colormap
             origin='upper',
             interpolation='nearest',
             vmin=vmin,
