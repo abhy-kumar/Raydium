@@ -8,17 +8,13 @@ from shapely.geometry import Point
 import time
 import logging
 import diskcache as dc
-from rasterio.transform import from_bounds
 import numpy as np
 from datetime import datetime
 
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(message)s',
-    handlers=[
-        logging.FileHandler("solar_data_collection.log"),
-        logging.StreamHandler()
-    ]
+    handlers=[logging.FileHandler("solar_data_collection.log"), logging.StreamHandler()]
 )
 logger = logging.getLogger(__name__)
 
@@ -30,39 +26,26 @@ class RateLimiter:
         self.lock = asyncio.Lock()
         self.backoff_factor = backoff_factor
         self.current_backoff = 0
-        self.max_backoff = 60  # Maximum backoff time in seconds
+        self.max_backoff = 60
 
     async def acquire(self):
         async with self.lock:
             current = time.time()
             self.calls = [t for t in self.calls if t > current - self.period]
-            
             if len(self.calls) >= self.max_calls:
-                # Calculate base sleep time
                 sleep_time = self.period - (current - min(self.calls)) + 0.1
-                
-                # Add exponential backoff if we're hitting limits frequently
-                if self.current_backoff > 0:
-                    sleep_time += self.current_backoff
-                    self.current_backoff = min(
-                        self.current_backoff * self.backoff_factor,
-                        self.max_backoff
-                    )
-                
+                sleep_time += self.current_backoff if self.current_backoff > 0 else 0
+                self.current_backoff = min(self.current_backoff * self.backoff_factor, self.max_backoff)
                 await asyncio.sleep(sleep_time)
-                self.calls = []  # Reset after backing off
+                self.calls = []
             else:
-                # Gradually reduce backoff when successful
                 self.current_backoff = max(0, self.current_backoff / self.backoff_factor)
-            
             self.calls.append(current)
 
-# Increased rate limit with proper backoff
 rate_limiter = RateLimiter(max_calls=3, period=1)
 
 class SolarDataValidator:
-    # NASA POWER radiation data typical ranges (kWh/m²/day)
-    MIN_RADIATION = 2.0  # Updated for more realistic minimum
+    MIN_RADIATION = 2.0
     MAX_RADIATION = 8.5
     
     @staticmethod
@@ -75,7 +58,6 @@ class SolarDataValidator:
     
     @staticmethod
     def convert_radiation(value):
-        # NASA POWER ALLSKY_SFC_SW_DWN data is already in kWh/m²/day
         return value
 
 async def fetch_solar_data(session, latitude, longitude, cache):
@@ -103,10 +85,7 @@ async def fetch_solar_data(session, latitude, longitude, cache):
         async with session.get(api_url, params=params, timeout=30) as response:
             if response.status == 429:
                 logger.warning("Rate limit exceeded, backing off...")
-                rate_limiter.current_backoff = max(
-                    rate_limiter.current_backoff * rate_limiter.backoff_factor,
-                    5  # Minimum backoff of 5 seconds
-                )
+                rate_limiter.current_backoff = max(rate_limiter.current_backoff * rate_limiter.backoff_factor, 5)
                 return None
             elif response.status != 200:
                 logger.error(f"Error {response.status} for ({latitude}, {longitude})")
@@ -117,15 +96,11 @@ async def fetch_solar_data(session, latitude, longitude, cache):
             if not solar_data:
                 return None
 
-            # Calculate daily averages and validate
-            daily_values = []
-            for value in solar_data.values():
-                converted_value = SolarDataValidator.convert_radiation(value)
-                if SolarDataValidator.validate_radiation(converted_value):
-                    daily_values.append(converted_value)
-                else:
-                    logger.warning(f"Invalid radiation value {converted_value} at ({latitude}, {longitude})")
-
+            daily_values = [
+                SolarDataValidator.convert_radiation(value)
+                for value in solar_data.values()
+                if SolarDataValidator.validate_radiation(value)
+            ]
             if not daily_values:
                 return None
 
@@ -149,7 +124,7 @@ class ProgressTracker:
         self.total_points = total_points
         self.processed_points = 0
         self.start_time = time.time()
-        self.checkpoint_interval = 100
+        self.checkpoint_interval = 500
         self.last_checkpoint = 0
 
     def update(self, batch_size):
@@ -158,7 +133,6 @@ class ProgressTracker:
             self.save_checkpoint()
             self.last_checkpoint = self.processed_points
         
-        # Calculate progress and ETA
         progress = (self.processed_points / self.total_points) * 100
         elapsed_time = time.time() - self.start_time
         points_per_second = self.processed_points / elapsed_time if elapsed_time > 0 else 0
@@ -174,7 +148,6 @@ class ProgressTracker:
     def save_checkpoint(self):
         checkpoint_file = f'solar_data_checkpoint_{self.processed_points}.json'
         logger.info(f"Saving checkpoint: {checkpoint_file}")
-        # Actual saving logic would go here
 
 async def process_grid_points(grid_points, batch_size=50):
     cache = dc.Cache('nasa_power_cache')
@@ -184,16 +157,13 @@ async def process_grid_points(grid_points, batch_size=50):
     async with aiohttp.ClientSession() as session:
         for i in range(0, len(grid_points), batch_size):
             batch = grid_points.iloc[i:i+batch_size]
-            tasks = [fetch_solar_data(session, point.y, point.x, cache) 
-                    for point in batch.geometry]
-            
+            tasks = [fetch_solar_data(session, point.y, point.x, cache) for point in batch.geometry]
             results = await asyncio.gather(*tasks)
             valid_results = [r for r in results if r is not None]
             solar_data.extend(valid_results)
             
             progress_tracker.update(batch_size)
             
-            # Save partial results more frequently
             if len(solar_data) % 500 == 0:
                 df = pd.DataFrame(solar_data)
                 timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -202,60 +172,37 @@ async def process_grid_points(grid_points, batch_size=50):
     cache.close()
     return solar_data
 
-def create_grid_points(geojson_path='india-soi.geojson', resolution=15000):
-    """
-    Create a grid of points within India's boundary with improved geometry handling.
-    """
+def create_grid_points(geojson_path='india-soi.geojson', resolution=10000):
     try:
-        # Load and verify the input geometry
         india = gpd.read_file(geojson_path)
-        logger.info(f"Initial CRS: {india.crs}")
-        
-        # Force to WGS84
         if india.crs != 'EPSG:4326':
             india = india.to_crs('EPSG:4326')
-            logger.info("Converted to WGS84")
         
-        # Buffer and simplify the geometry slightly to handle any topology issues
         india_geom = india.geometry.buffer(0).unary_union
-        logger.info(f"Geometry valid: {india_geom.is_valid}")
-        logger.info(f"Geometry type: {india_geom.geom_type}")
-        
-        # Get bounds
         bounds = india_geom.bounds
-        logger.info(f"Bounds: {bounds}")
         
-        # Calculate grid spacing in degrees
-        # Convert resolution from meters to degrees (approximately)
         mid_lat = (bounds[1] + bounds[3]) / 2
-        deg_resolution = resolution / 111000  # 1 degree ≈ 111km at the equator
-        
-        # Adjust for latitude
+        deg_resolution = resolution / 111000
         lon_resolution = deg_resolution / np.cos(np.radians(mid_lat))
         
-        logger.info(f"Grid resolution - Lat: {deg_resolution}, Lon: {lon_resolution}")
-        
-        # Generate grid coordinates
         lons = np.arange(bounds[0], bounds[2], lon_resolution)
         lats = np.arange(bounds[1], bounds[3], deg_resolution)
         
-        logger.info(f"Grid size: {len(lons)}x{len(lats)} points")
-        
-        # Create points with progress logging
         valid_points = []
         total_points = len(lons) * len(lats)
         processed = 0
+        sindex = india.sindex  # Spatial index for faster contains checks
         
         for lon in lons:
             for lat in lats:
                 point = Point(lon, lat)
                 processed += 1
-                
-                # Use contains() instead of within() for better performance
-                if india_geom.contains(point):
+                possible_matches_index = list(sindex.intersection(point.bounds))
+                possible_matches = india.iloc[possible_matches_index]
+                if any(possible_matches.contains(point)):
                     valid_points.append(point)
                 
-                if processed % 1000 == 0:
+                if processed % 5000 == 0:
                     logger.info(
                         f"Processed {processed}/{total_points} points "
                         f"({(processed/total_points)*100:.1f}%) - "
@@ -263,72 +210,29 @@ def create_grid_points(geojson_path='india-soi.geojson', resolution=15000):
                     )
         
         if not valid_points:
-            logger.error("No valid points found!")
-            logger.error(f"Total processed: {processed}")
-            logger.error(f"Grid bounds: {bounds}")
-            # Test a known point within India
-            test_point = Point(77.2, 28.6)  # New Delhi
-            logger.error(f"Test point (Delhi) contained: {india_geom.contains(test_point)}")
             raise ValueError("No valid points found within boundary")
         
-        # Create GeoDataFrame
-        points_gdf = gpd.GeoDataFrame(
-            geometry=valid_points,
-            crs='EPSG:4326'
-        )
-        
-        # Add coordinates as columns
+        points_gdf = gpd.GeoDataFrame(geometry=valid_points, crs='EPSG:4326')
         points_gdf['latitude'] = points_gdf.geometry.y
         points_gdf['longitude'] = points_gdf.geometry.x
-        
-        logger.info(f"Successfully created {len(points_gdf)} points")
-        
-        # Save debug information
-        try:
-            import matplotlib.pyplot as plt
-            fig, ax = plt.subplots(figsize=(15, 15))
-            india.plot(ax=ax, alpha=0.5)
-            points_gdf.plot(ax=ax, color='red', markersize=1)
-            plt.savefig('debug_grid.png')
-            logger.info("Saved debug plot")
-            
-            # Save a few sample points for verification
-            sample_points = points_gdf.head(5)
-            logger.info("Sample points:")
-            for idx, point in sample_points.iterrows():
-                logger.info(f"Point {idx}: ({point.longitude}, {point.latitude})")
-        except Exception as e:
-            logger.warning(f"Could not create debug output: {e}")
         
         return points_gdf
         
     except Exception as e:
         logger.error(f"Error in create_grid_points: {e}")
-        logger.exception("Detailed traceback:")
         raise
 
 async def main():
     try:
-        # Step 1: Create grid points
-        grid_points = create_grid_points(resolution=15000)
-        logger.info(f"Created {len(grid_points)} grid points")
-        
-        # Step 2: Process grid points to get solar data
+        grid_points = create_grid_points(resolution=10000)
         solar_data = await process_grid_points(grid_points)
-        logger.info(f"Collected solar data for {len(solar_data)} points")
-        
-        # Step 3: Create final DataFrame with all data
         result_df = pd.DataFrame(solar_data)
-        
-        # Step 4: Save results
         output_file = 'india_solar_data.csv'
         result_df.to_csv(output_file, index=False)
-        
         logger.info(f"Saved complete solar data to {output_file}")
         
     except Exception as e:
         logger.error(f"Error in main: {e}")
-        logger.exception("Detailed traceback:")
 
 if __name__ == "__main__":
-    asyncio.run(main())  # Use asyncio.run() to handle the async main function
+    asyncio.run(main())
