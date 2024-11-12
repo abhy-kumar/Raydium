@@ -83,37 +83,29 @@ def create_solar_map(solar_data_path='india_solar_data.csv', geojson_path='india
             logger.error("No valid data available after masking. Exiting.")
             return
         
-        vmin = float(np.percentile(valid_data, 2))
-        vmax = float(np.percentile(valid_data, 98))
+        # Ensure we have valid data and proper sorting of vmin/vmax
+        vmin = float(np.nanpercentile(valid_data, 2))
+        vmax = float(np.nanpercentile(valid_data, 98))
         
         logger.info(f"Initial vmin (2nd percentile): {vmin}")
         logger.info(f"Initial vmax (98th percentile): {vmax}")
         
-        # Ensure vmin is less than vmax and both are finite
+        # Ensure vmin and vmax are valid and properly ordered
         if not (np.isfinite(vmin) and np.isfinite(vmax)):
             logger.warning("vmin or vmax is not finite. Using min and max of valid data.")
-            vmin = float(np.min(valid_data))
-            vmax = float(np.max(valid_data))
+            vmin = float(np.nanmin(valid_data))
+            vmax = float(np.nanmax(valid_data))
         
         if vmin >= vmax:
-            logger.warning(f"vmin ({vmin}) >= vmax ({vmax}). Adjusting vmax.")
-            vmin = float(np.min(valid_data))
-            vmax = float(np.max(valid_data))
-            if vmin == vmax:
-                epsilon = 1e-6
-                vmax = vmin + epsilon
-                logger.warning(f"vmin and vmax are equal after adjustment. Setting vmax = vmin + epsilon ({vmax}).")
+            logger.warning(f"vmin ({vmin}) >= vmax ({vmax}). Adjusting values.")
+            vmin = float(np.nanmin(valid_data))
+            vmax = float(np.nanmax(valid_data))
+            if vmin >= vmax:
+                vmin = 0.0
+                vmax = 1.0
+                logger.warning(f"Setting default range: vmin={vmin}, vmax={vmax}")
         
-        # Create colormap using branca's standard colormap
-        logger.info("Creating colormap...")
-        colormap = cm.LinearColormap(
-            colors=['yellow', 'orange', 'red'],
-            vmin=vmin,
-            vmax=vmax,
-            caption='Solar Potential (kWh/m²/year)'
-        )
-        
-        # Create visualization
+        # Create matplotlib visualization
         logger.info("Creating matplotlib visualization...")
         fig, ax = plt.subplots(figsize=(20, 20), dpi=300)
         ax.set_axis_off()
@@ -122,7 +114,7 @@ def create_solar_map(solar_data_path='india_solar_data.csv', geojson_path='india
         img = ax.imshow(
             smoothed_masked,
             extent=india_proj.total_bounds,
-            cmap='plasma',  # Using matplotlib's plasma colormap
+            cmap='plasma',
             origin='upper',
             interpolation='nearest',
             vmin=vmin,
@@ -155,6 +147,16 @@ def create_solar_map(solar_data_path='india_solar_data.csv', geojson_path='india
             location=[center_lat, center_lon],
             zoom_start=5,
             tiles='CartoDB positron'
+        )
+        
+        # Create colormap with guaranteed sorted thresholds
+        colors = ['yellow', 'orange', 'red']
+        colormap = cm.LinearColormap(
+            colors=colors,
+            vmin=vmin,
+            vmax=vmax,
+            caption='Solar Potential (kWh/m²/year)',
+            index=np.linspace(vmin, vmax, len(colors))  # Ensure proper spacing
         )
         
         # Add image overlay
