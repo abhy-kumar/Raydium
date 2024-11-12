@@ -76,7 +76,6 @@ class SolarDataValidator:
     @staticmethod
     def convert_radiation(value):
         # NASA POWER ALLSKY_SFC_SW_DWN data is already in kWh/m²/day
-        # No conversion needed
         return value
 
 async def fetch_solar_data(session, latitude, longitude, cache):
