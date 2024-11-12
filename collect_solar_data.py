@@ -203,7 +203,7 @@ async def process_grid_points(grid_points, batch_size=50):
     cache.close()
     return solar_data
 
-def create_grid_points(geojson_path='india-soi.geojson', resolution=10000):
+def create_grid_points(geojson_path='india-soi.geojson', resolution=15000):
     """
     Create a grid of points within India's boundary with improved geometry handling.
     """
