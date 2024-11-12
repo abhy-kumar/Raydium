@@ -62,7 +62,7 @@ rate_limiter = RateLimiter(max_calls=3, period=1)
 
 class SolarDataValidator:
     # NASA POWER radiation data typical ranges (kWh/m²/day)
-    MIN_RADIATION = 0.5
+    MIN_RADIATION = 2.0  # Updated for more realistic minimum
     MAX_RADIATION = 8.5
     
     @staticmethod
@@ -75,9 +75,9 @@ class SolarDataValidator:
     
     @staticmethod
     def convert_radiation(value):
-        # NASA POWER data is in MJ/m²/day, convert to kWh/m²/day
-        # 1 MJ = 0.277778 kWh (verified conversion factor)
-        return value * 0.277778
+        # NASA POWER ALLSKY_SFC_SW_DWN data is already in kWh/m²/day
+        # No conversion needed
+        return value
 
 async def fetch_solar_data(session, latitude, longitude, cache):
     if not SolarDataValidator.validate_coordinates(latitude, longitude):
