@@ -314,7 +314,7 @@ def main():
         grid_points = create_grid_points(resolution=15000)
         
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        output_file = f'output/grid_points_{timestamp}.csv'
+        output_file = 'india_solar_data.csv'
         grid_points.to_csv(output_file, index=False)
         
         logger.info(f"Saved {len(grid_points)} points to {output_file}")
