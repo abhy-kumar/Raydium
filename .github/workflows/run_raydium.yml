@@ -6,6 +6,7 @@ on:
       - main
   schedule:
     - cron: '0 0 * * *'  # Every day at midnight UTC
+  workflow_dispatch:      # Enables manual trigger
 
 jobs:
   build:
@@ -24,7 +25,7 @@ jobs:
 
       - name: Install system dependencies
         run: |
-          sudo add-apt-repository ppa:ubuntugis/ppa
+          sudo add-apt-repository ppa:ubuntugis/ppa -y
           sudo apt-get update
           sudo apt-get install -y gdal-bin libgdal-dev python3-gdal
 
@@ -59,12 +60,18 @@ jobs:
         run: |
           python collect_solar_data.py
 
-      - name: Commit solar data
+      - name: Commit solar data and checkpoints
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add india_solar_data.csv
-          git diff --quiet && git diff --staged --quiet || git commit -m "Update solar data [skip ci]"
+          
+          # Add solar data and all checkpoint files
+          git add india_solar_data.csv checkpoints/
+          
+          # Commit if there are changes
+          git diff --quiet && git diff --staged --quiet || git commit -m "Update solar data and checkpoints [skip ci]"
+          
+          # Push changes to the repository
           git push
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -77,8 +84,14 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # Add visualization outputs
           git add solar_potential_high_res.png india_solar_potential.html
+          
+          # Commit if there are changes
           git diff --quiet && git diff --staged --quiet || git commit -m "Update solar visualization [skip ci]"
+          
+          # Push changes to the repository
           git push
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

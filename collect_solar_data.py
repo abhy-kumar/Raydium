@@ -10,6 +10,7 @@ import logging
 import diskcache as dc
 import numpy as np
 from datetime import datetime
+import json
 
 logging.basicConfig(
     level=logging.INFO,
@@ -119,18 +120,61 @@ async def fetch_solar_data(session, latitude, longitude, cache):
         logger.error(f"Error fetching data for ({latitude}, {longitude}): {e}")
         return None
 
+class CheckpointManager:
+    def __init__(self, checkpoint_dir='checkpoints'):
+        self.checkpoint_dir = checkpoint_dir
+        os.makedirs(checkpoint_dir, exist_ok=True)
+        self.grid_points_file = os.path.join(checkpoint_dir, 'grid_points.geojson')
+        self.progress_file = os.path.join(checkpoint_dir, 'progress.json')
+        self.data_file = os.path.join(checkpoint_dir, 'collected_data.csv')
+
+    def save_grid_points(self, grid_points):
+        if not os.path.exists(self.grid_points_file):
+            grid_points.to_file(self.grid_points_file, driver='GeoJSON')
+
+    def save_progress(self, processed_indices):
+        with open(self.progress_file, 'w') as f:
+            json.dump({'processed_indices': list(processed_indices)}, f)
+
+    def save_data(self, solar_data):
+        df = pd.DataFrame(solar_data)
+        df.to_csv(self.data_file, index=False, mode='a', header=not os.path.exists(self.data_file))
+
+    def load_state(self):
+        processed_indices = set()
+        solar_data = []
+
+        if os.path.exists(self.progress_file):
+            with open(self.progress_file, 'r') as f:
+                data = json.load(f)
+                processed_indices = set(data['processed_indices'])
+
+        if os.path.exists(self.data_file):
+            solar_data = pd.read_csv(self.data_file).to_dict('records')
+
+        return processed_indices, solar_data
+
+    def load_grid_points(self):
+        if os.path.exists(self.grid_points_file):
+            return gpd.read_file(self.grid_points_file)
+        return None
+
 class ProgressTracker:
-    def __init__(self, total_points):
+    def __init__(self, total_points, checkpoint_manager, processed_indices=None):
         self.total_points = total_points
-        self.processed_points = 0
+        self.processed_points = len(processed_indices) if processed_indices else 0
         self.start_time = time.time()
         self.checkpoint_interval = 500
-        self.last_checkpoint = 0
+        self.last_checkpoint = self.processed_points
+        self.checkpoint_manager = checkpoint_manager
+        self.processed_indices = processed_indices if processed_indices else set()
 
-    def update(self, batch_size):
-        self.processed_points += batch_size
+    def update(self, batch_indices, batch_data):
+        self.processed_indices.update(batch_indices)
+        self.processed_points = len(self.processed_indices)
+        
         if self.processed_points - self.last_checkpoint >= self.checkpoint_interval:
-            self.save_checkpoint()
+            self.save_checkpoint(batch_data)
             self.last_checkpoint = self.processed_points
         
         progress = (self.processed_points / self.total_points) * 100
@@ -145,34 +189,40 @@ class ProgressTracker:
             f"ETA: {datetime.fromtimestamp(time.time() + eta_seconds).strftime('%Y-%m-%d %H:%M:%S')}"
         )
 
-    def save_checkpoint(self):
-        checkpoint_file = f'solar_data_checkpoint_{self.processed_points}.json'
-        logger.info(f"Saving checkpoint: {checkpoint_file}")
+    def save_checkpoint(self, batch_data):
+        self.checkpoint_manager.save_progress(self.processed_indices)
+        self.checkpoint_manager.save_data(batch_data)
+        logger.info(f"Checkpoint saved at {self.processed_points} points")
 
-async def process_grid_points(grid_points, batch_size=50):
+async def process_grid_points(grid_points, checkpoint_manager, batch_size=50):
+    processed_indices, solar_data = checkpoint_manager.load_state()
+    progress_tracker = ProgressTracker(len(grid_points), checkpoint_manager, processed_indices)
     cache = dc.Cache('nasa_power_cache')
-    solar_data = []
-    progress_tracker = ProgressTracker(len(grid_points))
     
     async with aiohttp.ClientSession() as session:
-        for i in range(0, len(grid_points), batch_size):
-            batch = grid_points.iloc[i:i+batch_size]
+        remaining_indices = set(range(len(grid_points))) - processed_indices
+        
+        for i in range(0, len(remaining_indices), batch_size):
+            batch_indices = list(remaining_indices)[i:i+batch_size]
+            batch = grid_points.iloc[batch_indices]
             tasks = [fetch_solar_data(session, point.y, point.x, cache) for point in batch.geometry]
             results = await asyncio.gather(*tasks)
             valid_results = [r for r in results if r is not None]
-            solar_data.extend(valid_results)
             
-            progress_tracker.update(batch_size)
-            
-            if len(solar_data) % 500 == 0:
-                df = pd.DataFrame(solar_data)
-                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-                df.to_csv(f'solar_data_partial_{timestamp}.csv', index=False)
+            if valid_results:
+                progress_tracker.update(batch_indices, valid_results)
+                solar_data.extend(valid_results)
     
     cache.close()
     return solar_data
 
-def create_grid_points(geojson_path='india-soi.geojson', resolution=15000):
+def create_grid_points(geojson_path='india-soi.geojson', resolution=15000, checkpoint_manager=None):
+    if checkpoint_manager:
+        existing_points = checkpoint_manager.load_grid_points()
+        if existing_points is not None:
+            logger.info("Loading existing grid points from checkpoint")
+            return existing_points
+    
     try:
         india = gpd.read_file(geojson_path)
         if india.crs != 'EPSG:4326':
@@ -216,6 +266,9 @@ def create_grid_points(geojson_path='india-soi.geojson', resolution=15000):
         points_gdf['latitude'] = points_gdf.geometry.y
         points_gdf['longitude'] = points_gdf.geometry.x
         
+        if checkpoint_manager:
+            checkpoint_manager.save_grid_points(points_gdf)
+        
         return points_gdf
         
     except Exception as e:
@@ -224,8 +277,11 @@ def create_grid_points(geojson_path='india-soi.geojson', resolution=15000):
 
 async def main():
     try:
-        grid_points = create_grid_points(resolution=10000)
-        solar_data = await process_grid_points(grid_points)
+        checkpoint_manager = CheckpointManager()
+        grid_points = create_grid_points(resolution=10000, checkpoint_manager=checkpoint_manager)
+        solar_data = await process_grid_points(grid_points, checkpoint_manager)
+        
+        # Combine checkpoint data with final results
         result_df = pd.DataFrame(solar_data)
         output_file = 'india_solar_data.csv'
         result_df.to_csv(output_file, index=False)
