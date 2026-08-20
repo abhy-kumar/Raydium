@@ -49,9 +49,15 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e .
 
-      - name: Run Solar Intelligence Pipeline
+      - name: Run Solar Siting Engine
         run: |
-          raydium pipeline --resolution ${{ github.event.inputs.resolution || '0.25' }} --verbose
+          if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "Running full NASA POWER API data collection pipeline..."
+            raydium pipeline --resolution ${{ github.event.inputs.resolution || '0.25' }} --verbose
+          else
+            echo "Fast build and GIS visualization from repository solar data..."
+            raydium visualize --data india_solar_data.csv --grid-res 600
+          fi
         env:
           PYTHONUNBUFFERED: "1"
 
@@ -66,7 +72,8 @@ jobs:
             index.html
             india_solar_potential.html
 
-      - name: Commit & Push Updated Data
+      - name: Commit & Push Data (on scheduled updates)
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"

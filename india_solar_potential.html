@@ -284,7 +284,7 @@
             });
 
             // 1. Continuous Seamless Interpolated Solar Surface Overlay (Zero Dots!)
-            surfaceOverlay = L.imageOverlay(SURFACE_PNG, SURFACE_BOUNDS, {
+            surfaceOverlay = L.imageOverlay(SURFACE_PNG + '?v=' + Date.now(), SURFACE_BOUNDS, {
                 opacity: 0.75,
                 interactive: false,
                 crossOrigin: true,
