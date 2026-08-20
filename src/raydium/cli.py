@@ -127,10 +127,10 @@ def visualize(
     visualizer.render_static_map(raster_dict, output_image=image_out, dpi=dpi)
 
     console.print("[bold cyan]Generating modern interactive web dashboard...[/bold cyan]")
-    visualizer.render_interactive_dashboard(df, output_html=html_out)
+    visualizer.render_interactive_dashboard(df, raster_dict, output_html=html_out)
     
     # Also save copy to india_solar_potential.html for legacy compatibility
-    visualizer.render_interactive_dashboard(df, output_html="india_solar_potential.html")
+    visualizer.render_interactive_dashboard(df, raster_dict, output_html="india_solar_potential.html")
 
     console.print(f"[bold green][OK] High-res Map created: {image_out}[/bold green]")
     console.print(f"[bold green][OK] Interactive Dashboard created: {html_out} and india_solar_potential.html[/bold green]")
@@ -159,17 +159,17 @@ def analyze(
 
     res = summary["solar_resource"]
     table.add_row("Total Sampled Grid Points", f"{summary['total_sampled_points']:,}")
-    table.add_row("Mean Daily Irradiance (GHI)", f"{res['mean_daily_ghi']} kWh/m²/day")
-    table.add_row("Mean Annual Insolation", f"{res['mean_annual_ghi']} kWh/m²/year")
-    table.add_row("Max Peak Daily Irradiance", f"{res['max_daily_ghi']} kWh/m²/day")
-    table.add_row("Min Daily Irradiance", f"{res['min_daily_ghi']} kWh/m²/day")
-    table.add_row("Standard Deviation", f"{res['std_dev_ghi']} kWh/m²/day")
-    table.add_row("90th Percentile Irradiance", f"{res['p90_ghi']} kWh/m²/day")
+    table.add_row("Mean Daily Irradiance (GHI)", f"{res['mean_daily_ghi']} kWh/m2/day")
+    table.add_row("Mean Annual Insolation", f"{res['mean_annual_ghi']} kWh/m2/year")
+    table.add_row("Max Peak Daily Irradiance", f"{res['max_daily_ghi']} kWh/m2/day")
+    table.add_row("Min Daily Irradiance", f"{res['min_daily_ghi']} kWh/m2/day")
+    table.add_row("Standard Deviation", f"{res['std_dev_ghi']} kWh/m2/day")
+    table.add_row("90th Percentile Irradiance", f"{res['p90_ghi']} kWh/m2/day")
 
     proj = summary["national_potential_projection"]
     table.add_row("Estimated National Potential (1% land)", f"{proj['estimated_potential_gw']:,.0f} GW")
     table.add_row("Estimated Annual Generation", f"{proj['estimated_annual_twh']:,.1f} TWh/year")
-    table.add_row("Annual CO₂ Offset Potential", f"{proj['annual_co2_abatement_million_tonnes']:,.1f} Million Tonnes")
+    table.add_row("Annual CO2 Offset Potential", f"{proj['annual_co2_abatement_million_tonnes']:,.1f} Million Tonnes")
 
     console.print(table)
 
@@ -230,8 +230,8 @@ def pipeline(
 
     visualizer = MapVisualizer(geojson_path=geojson)
     visualizer.render_static_map(raster_dict, output_image=output_png)
-    visualizer.render_interactive_dashboard(df, output_html=output_html)
-    visualizer.render_interactive_dashboard(df, output_html="india_solar_potential.html")
+    visualizer.render_interactive_dashboard(df, raster_dict, output_html=output_html)
+    visualizer.render_interactive_dashboard(df, raster_dict, output_html="india_solar_potential.html")
     console.print(f"[green][OK] Stage 2 Complete: High-res PNG ({output_png}) and Interactive Dashboard ({output_html}) created[/green]")
 
     # 3. Analyze
