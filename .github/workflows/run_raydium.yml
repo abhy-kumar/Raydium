@@ -1,6 +1,8 @@
 name: Daily Solar Intelligence & Siting Pipeline
 
 on:
+  push:
+    branches: [ main, master ]
   schedule:
     # Run daily at 00:00 UTC (05:30 AM IST)
     - cron: '0 0 * * *'
