@@ -1,4 +1,4 @@
-"""Data models, constants, solar park database, and regional definitions for Raydium."""
+"""Data models, constants, and database for Indian solar plant siting analysis."""
 
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
@@ -6,14 +6,14 @@ from typing import Dict, List, Optional, Tuple
 
 @dataclass
 class SolarPoint:
-    """Represents solar irradiance and site parameters at a geographical point."""
+    """Represents meteorological and site parameters for a single geographic coordinate."""
     latitude: float
     longitude: float
-    ghi_daily: float              # Global Horizontal Irradiance (kWh/m²/day)
-    dni_daily: float = 0.0        # Direct Normal Irradiance (kWh/m²/day)
-    ghi_annual: float = 0.0       # kWh/m²/year
-    temp_ambient: float = 25.0    # Mean ambient temperature (°C)
-    suitability_score: float = 0.0  # 0 to 100
+    ghi_daily: float              # Global Horizontal Irradiance (kWh/m2/day)
+    dni_daily: float = 0.0        # Direct Normal Irradiance (kWh/m2/day)
+    ghi_annual: float = 0.0       # kWh/m2/year
+    temp_ambient: float = 25.0    # Annual mean ambient temperature (°C)
+    suitability_score: float = 0.0  # Normalized 0 to 100
     suitability_tier: str = "Unclassified"
     region: str = "All India"
     extra: Dict[str, float] = field(default_factory=dict)
@@ -22,7 +22,7 @@ class SolarPoint:
         return {
             "latitude": round(self.latitude, 4),
             "longitude": round(self.longitude, 4),
-            "potential": round(self.ghi_daily, 2),  # Backward compatibility
+            "potential": round(self.ghi_daily, 2),  # Kept for backward compatibility
             "ghi_daily": round(self.ghi_daily, 3),
             "ghi_annual": round(self.ghi_annual if self.ghi_annual > 0 else self.ghi_daily * 365.0, 1),
             "dni_daily": round(self.dni_daily, 3),
@@ -35,7 +35,7 @@ class SolarPoint:
 
 @dataclass
 class SolarPark:
-    """Information about an existing or planned mega solar park in India."""
+    """Operational or under-construction mega solar project in India."""
     name: str
     state: str
     capacity_mw: float
@@ -45,10 +45,12 @@ class SolarPark:
     area_acres: float = 0.0
     commissioned_year: Optional[int] = None
     developer: str = ""
+    substation: str = ""
     description: str = ""
 
 
 # Major operational and under-development mega solar parks across India
+# Data compiled from MNRE, SECI, and State Nodal Agencies
 MEGA_SOLAR_PARKS: List[SolarPark] = [
     SolarPark(
         name="Bhadla Solar Park",
@@ -60,7 +62,8 @@ MEGA_SOLAR_PARKS: List[SolarPark] = [
         area_acres=14000.0,
         commissioned_year=2020,
         developer="RSDCL / NTPC / SoftBank / Adani",
-        description="One of the largest solar parks in the world located in the Thar Desert with over 320 sunny days/year."
+        substation="765/400 kV Bhadla-II PGCIL Pooling Station",
+        description="Spans over 14,000 acres in Phalodi/Jodhpur district. Experiences over 325 clear sunny days annually with GHI exceeding 6.2 kWh/m2/day."
     ),
     SolarPark(
         name="Pavagada Solar Park (Shakti Sthala)",
@@ -72,7 +75,21 @@ MEGA_SOLAR_PARKS: List[SolarPark] = [
         area_acres=13000.0,
         commissioned_year=2019,
         developer="KREDL / SECI / Fortum / Tata Power",
-        description="Located in drought-prone Tumkur district, built on barren leased agricultural land."
+        substation="400/220 kV Pavagada Pooling Substation",
+        description="Constructed across 5 drought-prone villages in Tumkur district using an innovative land-lease model with local farmers."
+    ),
+    SolarPark(
+        name="Khavda Renewable Energy Park",
+        state="Gujarat",
+        capacity_mw=30000.0,
+        latitude=23.8500,
+        longitude=69.7500,
+        status="Under Construction",
+        area_acres=72600.0,
+        commissioned_year=2026,
+        developer="Adani Green / NTPC / GIPCL",
+        substation="765 kV Khavda Pooling Station (ISTS)",
+        description="Hybrid solar-wind park in the salt desert of Rann of Kutch. Slated to become the largest single power generation facility on Earth."
     ),
     SolarPark(
         name="Kurnool Ultra Mega Solar Park",
@@ -84,7 +101,8 @@ MEGA_SOLAR_PARKS: List[SolarPark] = [
         area_acres=5932.0,
         commissioned_year=2017,
         developer="APSPCL / NTPC / SunEdison / Greenko",
-        description="Pioneering mega park in Andhra Pradesh generating ~2,600 GWh annually."
+        substation="400/220 kV Ghani Substation",
+        description="Built in Sakunala village of Kurnool district on arid rocky terrain, generating ~2,600 GWh per year."
     ),
     SolarPark(
         name="Rewa Ultra Mega Solar",
@@ -95,20 +113,9 @@ MEGA_SOLAR_PARKS: List[SolarPark] = [
         status="Operational",
         area_acres=3928.0,
         commissioned_year=2018,
-        developer="RUMSL / Mahindra / ACME / Solenergi",
-        description="Supplies clean energy to Delhi Metro (DMRC) meeting ~60% of its daytime power demand."
-    ),
-    SolarPark(
-        name="Khavda Hybrid Renewable Energy Park",
-        state="Gujarat",
-        capacity_mw=30000.0,
-        latitude=23.8500,
-        longitude=69.7500,
-        status="Under Construction",
-        area_acres=72600.0,
-        commissioned_year=2026,
-        developer="Adani Green / NTPC / GIPCL",
-        description="World's largest hybrid renewable energy park in the Rann of Kutch with 20 GW solar and 10 GW wind."
+        developer="RUMSL / Mahindra Susten / ACME / Solenergi",
+        substation="400/220 kV PGCIL Substation Rewa",
+        description="First project in India to supply institutional open-access power directly to Delhi Metro Rail Corporation (DMRC)."
     ),
     SolarPark(
         name="Dholera Solar Park",
@@ -120,19 +127,8 @@ MEGA_SOLAR_PARKS: List[SolarPark] = [
         area_acres=27000.0,
         commissioned_year=2025,
         developer="GPCL / SECI / Tata Power / Torrent",
-        description="Mega park inside the Dholera Special Investment Region (SIR) along the Gulf of Khambhat."
-    ),
-    SolarPark(
-        name="Charanka Solar Park",
-        state="Gujarat",
-        capacity_mw=690.0,
-        latitude=23.9056,
-        longitude=71.2056,
-        status="Operational",
-        area_acres=5384.0,
-        commissioned_year=2012,
-        developer="GPCL",
-        description="India's first major solar park landmark in Patan district."
+        substation="400 kV Dholera SIR Substation",
+        description="Situated within the Dholera Special Investment Region along the Gulf of Khambhat with flat coastal topography."
     ),
     SolarPark(
         name="Ananthapuramu Ultra Mega Solar",
@@ -144,7 +140,21 @@ MEGA_SOLAR_PARKS: List[SolarPark] = [
         area_acres=7726.0,
         commissioned_year=2019,
         developer="APSPCL / NTPC / Tata Power",
-        description="Spans NP Kunta in Anantapur district with excellent southern irradiance."
+        substation="400/220 kV NP Kunta Substation",
+        description="Located in NP Kunta, Anantapur district, taking advantage of Southern India's high annual global horizontal insolation."
+    ),
+    SolarPark(
+        name="Charanka Solar Park",
+        state="Gujarat",
+        capacity_mw=690.0,
+        latitude=23.9056,
+        longitude=71.2056,
+        status="Operational",
+        area_acres=5384.0,
+        commissioned_year=2012,
+        developer="GPCL",
+        substation="400/220 kV Charanka Substation",
+        description="India's pioneering utility-scale solar park built on wasteland in Patan district under the Gujarat Solar Policy 2009."
     ),
     SolarPark(
         name="Kamuthi Solar Power Project",
@@ -156,10 +166,11 @@ MEGA_SOLAR_PARKS: List[SolarPark] = [
         area_acres=2500.0,
         commissioned_year=2016,
         developer="Adani Power",
-        description="Single-location solar plant in Ramanathapuram district built in a record 8 months."
+        substation="400 kV Kamuthi Substation",
+        description="Constructed in Ramanathapuram district in just 8 months, equipped with automated robotic panel cleaning systems."
     ),
     SolarPark(
-        name="Leh & Kargil Ultra Mega Solar",
+        name="Leh & Kargil Solar Initiative",
         state="Ladakh",
         capacity_mw=10000.0,
         latitude=34.1526,
@@ -168,7 +179,8 @@ MEGA_SOLAR_PARKS: List[SolarPark] = [
         area_acres=50000.0,
         commissioned_year=2028,
         developer="SECI / Ministry of Power",
-        description="High-altitude cold desert mega project with ultra-high clear-sky solar irradiance."
+        substation="Proposed Pang-Kaithal 765 kV HVDC Corridor",
+        description="High-altitude cold desert project benefiting from thin atmosphere, high DNI (>7 kWh/m2), and lower ambient temperature cell efficiency gains."
     ),
     SolarPark(
         name="Mandsaur Solar Park",
@@ -180,7 +192,8 @@ MEGA_SOLAR_PARKS: List[SolarPark] = [
         area_acres=1300.0,
         commissioned_year=2017,
         developer="NTPC",
-        description="Utility scale installation in Western Madhya Pradesh."
+        substation="220 kV Suwasra Substation",
+        description="Utility-scale park in western Madhya Pradesh connected directly to the Western Regional Grid."
     ),
     SolarPark(
         name="Kadapa Ultra Mega Solar Park",
@@ -192,12 +205,13 @@ MEGA_SOLAR_PARKS: List[SolarPark] = [
         area_acres=5927.0,
         commissioned_year=2020,
         developer="APSPCL / SECI",
-        description="Part of Andhra Pradesh's mega solar initiative in Galiveedu mandal."
+        substation="400/220 kV Galiveedu Substation",
+        description="Developed on barren government lands in Galiveedu mandal of Rayalaseema region."
     )
 ]
 
 
-# Regional bounding boxes for filtering & analysis
+# Regional bounding boxes for geospatial querying
 REGIONAL_BOUNDS: Dict[str, Tuple[float, float, float, float]] = {
     "all": (68.0, 6.5, 97.5, 37.5),
     "north": (73.0, 26.0, 81.0, 37.5),
@@ -212,26 +226,26 @@ REGIONAL_BOUNDS: Dict[str, Tuple[float, float, float, float]] = {
 }
 
 
-# Solar plant suitability tiers
+# Siting Suitability Tiers and engineering classifications
 SUITABILITY_TIERS = {
     "Tier 1 - Prime Location": {
         "min_score": 85.0,
-        "color": "#10b981",  # Emerald Green
-        "description": "World-class solar irradiance (>5.8 kWh/m²/day), flat topography, and optimal thermal rating. Ideal for GW-scale utility parks."
+        "color": "#10b981",
+        "description": "Outstanding irradiance (>5.8 kWh/m2/day), flat arid terrain, and optimal grid connectivity. Primary choice for GW-scale utility parks."
     },
     "Tier 2 - Highly Suitable": {
         "min_score": 70.0,
-        "color": "#3b82f6",  # Blue
-        "description": "High solar resource (5.0 - 5.8 kWh/m²/day) and favorable terrain. Excellent for utility and commercial solar farms."
+        "color": "#3b82f6",
+        "description": "Strong solar resource (5.0 - 5.8 kWh/m2/day) and low slope. Well-suited for 50-500 MW commercial and utility solar farms."
     },
     "Tier 3 - Moderately Suitable": {
         "min_score": 50.0,
-        "color": "#f59e0b",  # Amber
-        "description": "Moderate solar resource (4.2 - 5.0 kWh/m²/day). Highly viable for rooftop, agrivoltaics, and distributed solar."
+        "color": "#f59e0b",
+        "description": "Moderate insolation (4.2 - 5.0 kWh/m2/day). Suitable for rooftop solar, microgrids, canal-top solar, and agrivoltaics."
     },
     "Tier 4 - Constrained / Low": {
         "min_score": 0.0,
-        "color": "#ef4444",  # Red
-        "description": "Sub-optimal solar resource (<4.2 kWh/m²/day), high cloudiness, or steep terrain slope (Himalayas/Ghats)."
+        "color": "#ef4444",
+        "description": "Sub-optimal resource (<4.2 kWh/m2/day), persistent monsoon cloudiness, or steep topography (Himalayas, Western Ghats)."
     }
 }
