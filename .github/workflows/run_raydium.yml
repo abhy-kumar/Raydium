@@ -80,7 +80,8 @@ jobs:
           git add india_solar_data.csv solar_potential_high_res.png solar_suitability_surface.png index.html india_solar_potential.html
           git diff --staged --quiet || (
             git commit -m "Automated daily solar potential & plant suitability update [skip ci]" &&
-            git push
+            git pull --rebase origin main &&
+            git push origin main
           )
 
       - name: Setup GitHub Pages
