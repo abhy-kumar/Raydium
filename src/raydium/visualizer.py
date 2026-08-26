@@ -232,48 +232,45 @@ class MapVisualizer:
         """
         logger.info(f"Generating high-precision GIS platform at {output_html}...")
 
-        # Build structured 2D grid matrix for fast client-side bilinear interpolation
-        lats = sorted(df["latitude"].unique())
-        lons = sorted(df["longitude"].unique())
+        # Ensure spatial interpolation on regular uniform dense grid
+        from raydium.interpolator import SpatialInterpolator
+        interpolator = SpatialInterpolator(geojson_path=self.geojson_path)
         
-        lat_min, lat_max = float(min(lats)), float(max(lats))
-        lon_min, lon_max = float(min(lons)), float(max(lons))
-        
-        # Calculate step
-        d_lat = float(lats[1] - lats[0]) if len(lats) > 1 else 0.25
-        d_lon = float(lons[1] - lons[0]) if len(lons) > 1 else 0.25
-        
-        n_lat = len(lats)
-        n_lon = len(lons)
-        
-        # Index lookup
-        df_indexed = df.set_index(["latitude", "longitude"])
-        
-        flat_grid = []
-        for la in lats:
-            for lo in lons:
-                if (la, lo) in df_indexed.index:
-                    row = df_indexed.loc[(la, lo)]
-                    if isinstance(row, pd.DataFrame):
-                        row = row.iloc[0]
-                    flat_grid.append([
-                        round(float(row.get("suitability_score", 0)), 1),
-                        round(float(row.get("ghi_daily", 0)), 2),
-                        round(float(row.get("dni_daily", 0)), 2),
-                        round(float(row.get("temp_ambient", 25)), 1)
+        score_res = interpolator.interpolate_surface(df, value_column="suitability_score", grid_resolution=120)
+        ghi_res   = interpolator.interpolate_surface(df, value_column="ghi_daily", grid_resolution=120)
+        dni_res   = interpolator.interpolate_surface(df, value_column="dni_daily", grid_resolution=120)
+        temp_res  = interpolator.interpolate_surface(df, value_column="temp_ambient", grid_resolution=120)
+
+        minx, miny, maxx, maxy = score_res["bounds"]
+        mask = score_res["mask"]  # (height, width), True where inside India
+        height, width = score_res["raw_raster"].shape
+
+        raw_score = score_res["raw_raster"]
+        raw_ghi   = ghi_res["raw_raster"]
+        raw_dni   = dni_res["raw_raster"]
+        raw_temp  = temp_res["raw_raster"]
+
+        # Build compact flat matrix: row 0 is lat_max, row height-1 is lat_min
+        grid_matrix = []
+        for r in range(height):
+            for c in range(width):
+                if mask[r, c]:
+                    grid_matrix.append([
+                        round(float(raw_score[r, c]), 1),
+                        round(float(raw_ghi[r, c]), 2),
+                        round(float(raw_dni[r, c]), 2),
+                        round(float(raw_temp[r, c]), 1)
                     ])
                 else:
-                    flat_grid.append(None)
+                    grid_matrix.append(None)
 
         grid_meta = {
-            "lat_min": round(lat_min, 4),
-            "lat_max": round(lat_max, 4),
-            "lon_min": round(lon_min, 4),
-            "lon_max": round(lon_max, 4),
-            "d_lat": round(d_lat, 4),
-            "d_lon": round(d_lon, 4),
-            "n_lat": n_lat,
-            "n_lon": n_lon,
+            "lat_min": round(float(miny), 4),
+            "lat_max": round(float(maxy), 4),
+            "lon_min": round(float(minx), 4),
+            "lon_max": round(float(maxx), 4),
+            "n_lat": height,
+            "n_lon": width,
         }
 
         # Candidate Zones Data with Polygons and Substations
@@ -610,7 +607,7 @@ class MapVisualizer:
 
     <script>
         const GRID_META = """ + json.dumps(grid_meta) + """;
-        const FLAT_GRID = """ + json.dumps(flat_grid) + """;
+        const GRID_MATRIX = """ + json.dumps(grid_matrix) + """;
         const CANDIDATE_ZONES = """ + json.dumps(candidate_zones_data) + """;
         const MEGA_PARKS = """ + json.dumps(parks_data) + """;
         const INDIA_GEOJSON = """ + geojson_str + """;
@@ -648,38 +645,40 @@ class MapVisualizer:
             ];
         }
 
-        // Fast Bilinear Spatial Interpolator
+        // Fast Bilinear Spatial Interpolator on Uniform 2D Matrix
         function sampleBilinear(lat, lon) {
-            const { lat_min, lat_max, lon_min, lon_max, d_lat, d_lon, n_lat, n_lon } = GRID_META;
+            const { lat_min, lat_max, lon_min, lon_max, n_lat, n_lon } = GRID_META;
             if (lat < lat_min || lat > lat_max || lon < lon_min || lon > lon_max) return null;
 
-            const y = (lat - lat_min) / d_lat;
-            const x = (lon - lon_min) / d_lon;
+            // Row 0 is at lat_max, row n_lat-1 is at lat_min
+            const row = ((lat_max - lat) / (lat_max - lat_min)) * (n_lat - 1);
+            // Col 0 is at lon_min, col n_lon-1 is at lon_max
+            const col = ((lon - lon_min) / (lon_max - lon_min)) * (n_lon - 1);
 
-            const i0 = Math.floor(y);
-            const i1 = Math.min(n_lat - 1, i0 + 1);
-            const j0 = Math.floor(x);
-            const j1 = Math.min(n_lon - 1, j0 + 1);
+            const r0 = Math.floor(row);
+            const r1 = Math.min(n_lat - 1, r0 + 1);
+            const c0 = Math.floor(col);
+            const c1 = Math.min(n_lon - 1, c0 + 1);
 
-            const ty = y - i0;
-            const tx = x - j0;
+            const tr = row - r0;
+            const tc = col - c0;
 
-            const v00 = FLAT_GRID[i0 * n_lon + j0];
-            const v01 = FLAT_GRID[i0 * n_lon + j1];
-            const v10 = FLAT_GRID[i1 * n_lon + j0];
-            const v11 = FLAT_GRID[i1 * n_lon + j1];
+            const v00 = GRID_MATRIX[r0 * n_lon + c0];
+            const v01 = GRID_MATRIX[r0 * n_lon + c1];
+            const v10 = GRID_MATRIX[r1 * n_lon + c0];
+            const v11 = GRID_MATRIX[r1 * n_lon + c1];
 
-            // If some nodes are out-of-boundary, fallback to nearest valid
             const valid = [v00, v01, v10, v11].filter(v => v !== null && v !== undefined);
             if (valid.length === 0) return null;
             if (valid.length < 4) {
-                return { score: valid[0][0], ghi: valid[0][1], dni: valid[0][2], temp: valid[0][3] };
+                const v = valid[0];
+                return { score: v[0], ghi: v[1], dni: v[2], temp: v[3] };
             }
 
-            const score = (1 - ty) * ((1 - tx) * v00[0] + tx * v01[0]) + ty * ((1 - tx) * v10[0] + tx * v11[0]);
-            const ghi   = (1 - ty) * ((1 - tx) * v00[1] + tx * v01[1]) + ty * ((1 - tx) * v10[1] + tx * v11[1]);
-            const dni   = (1 - ty) * ((1 - tx) * v00[2] + tx * v01[2]) + ty * ((1 - tx) * v10[2] + tx * v11[2]);
-            const temp  = (1 - ty) * ((1 - tx) * v00[3] + tx * v01[3]) + ty * ((1 - tx) * v10[3] + tx * v11[3]);
+            const score = (1 - tr) * ((1 - tc) * v00[0] + tc * v01[0]) + tr * ((1 - tc) * v10[0] + tc * v11[0]);
+            const ghi   = (1 - tr) * ((1 - tc) * v00[1] + tc * v01[1]) + tr * ((1 - tc) * v10[1] + tc * v11[1]);
+            const dni   = (1 - tr) * ((1 - tc) * v00[2] + tc * v01[2]) + tr * ((1 - tc) * v10[2] + tc * v11[2]);
+            const temp  = (1 - tr) * ((1 - tc) * v00[3] + tc * v01[3]) + tr * ((1 - tc) * v10[3] + tc * v11[3]);
 
             return { score, ghi, dni, temp };
         }
@@ -1246,6 +1245,6 @@ class MapVisualizer:
             f.write(html_template)
 
         file_size_kb = os.path.getsize(output_html) / 1024
-        logger.info(f"Dashboard generated: {output_html} ({file_size_kb:.1f} KB, {n_lat}x{n_lon} grid matrix, 15 candidate zones)")
+        logger.info(f"Dashboard generated: {output_html} ({file_size_kb:.1f} KB, {height}x{width} grid matrix, 15 candidate zones)")
         return output_html
 
