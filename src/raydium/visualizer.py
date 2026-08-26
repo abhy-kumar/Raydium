@@ -876,6 +876,41 @@ class MapVisualizer:
 
                     const subMarker = L.circleMarker(zone.sub_coords, {
                         radius: 5,
+                        fillColor: '#f59e0b',
+                        color: '#ffffff',
+                        weight: 1.5,
+                        fillOpacity: 0.9
+                    });
+                    subMarker.bindPopup(`<div class="custom-popup text-xs p-1"><b class="text-amber-400">${zone.substation}</b><br>Distance: ${zone.grid_dist_km} km</div>`);
+                    candidateLinesLayer.addLayer(subMarker);
+                }
+            });
+        }
+
+        function displayCandidateDossier(zone) {
+            currentGhi = zone.ghi;
+            document.getElementById('panelTitle').innerText = "Site Dossier";
+            document.getElementById('siteSubtitle').innerText = `Rank #${zone.rank} Candidate Solar Zone`;
+            document.getElementById('siteName').innerText = zone.name;
+            document.getElementById('siteBadge').innerText = `RANK #${zone.rank}`;
+            document.getElementById('siteBadge').className = "text-[10px] font-mono font-bold px-1.5 py-0.5 rounded border shrink-0 ml-1 bg-emerald-500/20 text-emerald-300 border-emerald-500/30";
+            document.getElementById('siteLocation').innerText = `${zone.district}, ${zone.state}`;
+            document.getElementById('siteCoords').innerText = `${zone.lat.toFixed(4)} N, ${zone.lon.toFixed(4)} E | ${zone.capacity_mw.toLocaleString()} MW (~${zone.area_acres.toLocaleString()} Acres)`;
+            document.getElementById('valGhi').innerText = zone.ghi.toFixed(2);
+            document.getElementById('valDni').innerText = zone.dni.toFixed(2);
+            document.getElementById('valScore').innerText = zone.score.toFixed(1);
+            document.getElementById('valSlope').innerText = `${zone.slope}%`;
+            document.getElementById('valLand').innerText = zone.land_type;
+            document.getElementById('valSubstation').innerText = `${zone.substation} (${zone.grid_dist_km} km)`;
+            document.getElementById('valLcoe').innerText = `Rs ${zone.lcoe.toFixed(2)} / kWh`;
+            document.getElementById('valAdvantages').innerText = zone.advantages;
+
+            calculateCustomYield(document.getElementById('landAreaSlider').value);
+
+            const panel = document.getElementById('sidePanel');
+            if (panel.classList.contains('translate-x-full')) toggleSidePanel();
+        }
+
         // National Inter-State Transmission System (ISTS) 765/400 kV Substation Network
         const ISTS_SUBSTATIONS = [
             { name: "765/400 kV Fatehgarh-II Pooling Station", lat: 26.78, lon: 71.12, kv: "765/400 kV", state: "Rajasthan" },
@@ -1134,7 +1169,8 @@ class MapVisualizer:
 
         function zoomToCandidate(idx) {
             if (idx === "" || idx === null) return;
-            const zone = CANDIDATES[parseInt(idx)] || CANDIDATE_ZONES[parseInt(idx)];
+            const zone = CANDIDATE_ZONES[parseInt(idx)];
+            if (!zone) return;
             map.flyTo([zone.lat, zone.lon], 9, { duration: 1.4 });
             displayCandidateDossier(zone);
         }
