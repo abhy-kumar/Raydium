@@ -43,8 +43,8 @@ def create_solar_map(solar_data_path="india_solar_data.csv", geojson_path="india
     visualizer.render_static_map(raster_dict, output_image="solar_potential_high_res.png", dpi=300)
 
     logger.info("Generating interactive web dashboard (index.html & india_solar_potential.html)...")
-    visualizer.render_interactive_dashboard(df, raster_dict, output_html="index.html")
-    visualizer.render_interactive_dashboard(df, raster_dict, output_html="india_solar_potential.html")
+    visualizer.render_interactive_dashboard(df, output_html="index.html")
+    visualizer.render_interactive_dashboard(df, output_html="india_solar_potential.html")
 
     logger.info("Visualization pipeline completed successfully!")
 

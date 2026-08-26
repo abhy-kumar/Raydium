@@ -1,4 +1,4 @@
-"""High-resolution cartography and continuous GIS dashboard generator for solar plant siting in India."""
+﻿"""High-resolution cartography and continuous GIS dashboard generator for solar plant siting in India."""
 
 import json
 import logging
@@ -219,39 +219,51 @@ class MapVisualizer:
     def render_interactive_dashboard(
         self,
         df: pd.DataFrame,
-        raster_dict: Dict,
+        raster_dict: Optional[Dict] = None,
         output_html: str = "index.html",
         surface_png_path: str = "solar_suitability_surface.png",
     ) -> str:
-        """Generate a continuous, precision GIS workbench with candidate site zones and satellite terrain inspection."""
-        logger.info(f"Generating precision interactive dashboard at {output_html}...")
+        """Generate an interactive GIS dashboard with vector grid cells rendered via Canvas.
 
-        # Ensure transparent raster surface is generated
-        self.export_transparent_surface_png(raster_dict, output_surface=surface_png_path)
+        Each data point is rendered as a colored rectangle that stays crisp at
+        every zoom level. No external PNG dependency. Clicking any cell shows
+        its real GHI, DNI, temperature, and suitability metrics in the side panel.
+        """
+        logger.info(f"Generating vector-cell interactive dashboard at {output_html}...")
 
-        bounds = raster_dict["bounds"]  # [minx, miny, maxx, maxy] -> [min_lon, min_lat, max_lon, max_lat]
-        bounds_json = [
-            [float(bounds[1]), float(bounds[0])],  # South-West: [lat, lon]
-            [float(bounds[3]), float(bounds[2])]   # North-East: [lat, lon]
-        ]
+        # Build compact grid data for embedding
+        cols_needed = ["latitude", "longitude", "ghi_daily", "dni_daily",
+                       "temp_ambient", "suitability_score", "suitability_tier"]
+        grid_rows = []
+        for _, row in df.iterrows():
+            grid_rows.append({
+                "la": round(float(row.get("latitude", 0)), 4),
+                "lo": round(float(row.get("longitude", 0)), 4),
+                "g": round(float(row.get("ghi_daily", 0)), 3),
+                "d": round(float(row.get("dni_daily", 0)), 3),
+                "t": round(float(row.get("temp_ambient", 25)), 1),
+                "s": round(float(row.get("suitability_score", 0)), 1),
+                "ti": str(row.get("suitability_tier", "Unclassified")),
+            })
+
+        # Auto-detect grid step from data
+        lats_sorted = sorted(set(r["la"] for r in grid_rows))
+        if len(lats_sorted) > 1:
+            diffs = [lats_sorted[i+1] - lats_sorted[i] for i in range(min(20, len(lats_sorted) - 1))]
+            grid_step = round(min(d for d in diffs if d > 0.001), 4)
+        else:
+            grid_step = 0.25
 
         # Candidate Zones Data
         candidate_zones_data = [
             {
-                "rank": z.rank,
-                "name": z.name,
-                "district": z.district,
-                "state": z.state,
-                "lat": z.latitude,
-                "lon": z.longitude,
+                "rank": z.rank, "name": z.name, "district": z.district,
+                "state": z.state, "lat": z.latitude, "lon": z.longitude,
                 "capacity_mw": z.potential_capacity_mw,
                 "area_acres": z.estimated_area_acres,
-                "ghi": z.ghi_daily,
-                "dni": z.dni_daily,
-                "score": z.suitability_score,
-                "slope": z.terrain_slope_pct,
-                "land_type": z.land_type,
-                "substation": z.nearest_substation,
+                "ghi": z.ghi_daily, "dni": z.dni_daily,
+                "score": z.suitability_score, "slope": z.terrain_slope_pct,
+                "land_type": z.land_type, "substation": z.nearest_substation,
                 "grid_dist_km": z.substation_distance_km,
                 "water_clean": z.water_cleaning_index,
                 "lcoe": z.lcoe_estimate_inr,
@@ -263,16 +275,10 @@ class MapVisualizer:
         # Existing Parks Data
         parks_data = [
             {
-                "name": p.name,
-                "state": p.state,
-                "capacity": p.capacity_mw,
-                "lat": p.latitude,
-                "lon": p.longitude,
-                "status": p.status,
-                "developer": p.developer,
-                "substation": p.substation,
-                "year": p.commissioned_year,
-                "desc": p.description,
+                "name": p.name, "state": p.state, "capacity": p.capacity_mw,
+                "lat": p.latitude, "lon": p.longitude, "status": p.status,
+                "developer": p.developer, "substation": p.substation,
+                "year": p.commissioned_year, "desc": p.description,
             }
             for p in MEGA_SOLAR_PARKS
         ]
@@ -288,13 +294,9 @@ class MapVisualizer:
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Raydium: Solar Plant Siting Tool for India</title>
-    
-    <!-- Google Fonts: Inter & JetBrains Mono -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-
-    <!-- Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
         tailwind.config = {
@@ -304,480 +306,423 @@ class MapVisualizer:
                     fontFamily: {
                         sans: ['Inter', 'sans-serif'],
                         mono: ['JetBrains Mono', 'monospace'],
-                    },
-                    colors: {
-                        slate: {
-                            850: '#111827',
-                            900: '#0b0f19',
-                            950: '#050811',
-                        }
                     }
                 }
             }
         }
     </script>
-    
-    <!-- Leaflet CSS & JS -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <!-- Lucide Icons -->
     <script src="https://unpkg.com/lucide@latest"></script>
-
     <style>
         body { font-family: 'Inter', sans-serif; }
-        #map { height: calc(100vh - 64px); width: 100%; z-index: 10; background: #050811; }
+        #map { height: calc(100vh - 56px); width: 100%; z-index: 10; background: #050811; }
         .custom-popup .leaflet-popup-content-wrapper {
-            background: #0b0f19;
-            color: #f1f5f9;
-            border: 1px solid #1e293b;
-            border-radius: 10px;
-            box-shadow: 0 20px 25px -5px rgb(0 0 0 / 0.7);
-            padding: 4px;
+            background: #0f172a; color: #f1f5f9;
+            border: 1px solid #1e293b; border-radius: 8px;
+            box-shadow: 0 10px 20px -5px rgb(0 0 0 / 0.6); padding: 2px;
         }
-        .custom-popup .leaflet-popup-tip { background: #0b0f19; }
-        .glass-panel {
-            background: rgba(11, 15, 25, 0.90);
-            backdrop-filter: blur(16px);
-            border: 1px solid rgba(30, 41, 59, 0.75);
+        .custom-popup .leaflet-popup-tip { background: #0f172a; }
+        .panel {
+            background: rgba(15, 23, 42, 0.92);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(30, 41, 59, 0.7);
         }
-        ::-webkit-scrollbar { width: 6px; }
-        ::-webkit-scrollbar-track { background: #0b0f19; }
-        ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
-        ::-webkit-scrollbar-thumb:hover { background: #475569; }
+        ::-webkit-scrollbar { width: 5px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
     </style>
 </head>
 <body class="bg-slate-950 text-slate-100 font-sans antialiased overflow-hidden flex flex-col h-screen">
 
-    <!-- Top Engineering Navbar -->
-    <header class="h-16 bg-slate-900 border-b border-slate-800 px-6 py-2.5 flex items-center justify-between z-30">
-        <div class="flex items-center space-x-3.5">
-            <div class="w-9 h-9 rounded-lg bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400">
-                <i data-lucide="sun" class="w-5 h-5"></i>
+    <!-- Navbar -->
+    <header class="h-14 bg-slate-900 border-b border-slate-800 px-5 flex items-center justify-between z-30 shrink-0">
+        <div class="flex items-center gap-3">
+            <div class="w-8 h-8 rounded-lg bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400">
+                <i data-lucide="sun" class="w-4 h-4"></i>
             </div>
-            <div>
-                <div class="flex items-center gap-2">
-                    <h1 class="text-base font-semibold tracking-tight text-white">RAYDIUM</h1>
-                    <span class="text-[10px] font-mono bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded border border-emerald-500/30">SITING TOOL</span>
-                    <span class="text-[11px] text-slate-400 font-normal hidden sm:inline">| Solar Siting for India</span>
-                </div>
-            </div>
+            <h1 class="text-sm font-semibold tracking-tight text-white">RAYDIUM</h1>
+            <span class="text-[10px] font-mono bg-emerald-500/15 text-emerald-400 px-1.5 py-0.5 rounded border border-emerald-500/25">SITING</span>
         </div>
-
-        <!-- Candidate Zones Quick Selector -->
-        <div class="hidden md:flex items-center space-x-3 text-xs">
-            <label class="text-slate-400 text-[11px] font-medium flex items-center gap-1.5">
-                <i data-lucide="target" class="w-3.5 h-3.5 text-emerald-400"></i> Jump to Site:
-            </label>
-            <select id="siteSelect" onchange="zoomToCandidate(this.value)" class="bg-slate-800 text-slate-200 text-xs rounded-lg px-3 py-1.5 border border-slate-700 font-medium focus:outline-none focus:border-amber-500 cursor-pointer">
-                <option value="">-- Select Candidate Solar Zone --</option>
+        <div class="hidden md:flex items-center gap-2 text-xs">
+            <select id="siteSelect" onchange="zoomToCandidate(this.value)"
+                class="bg-slate-800 text-slate-200 text-xs rounded px-2.5 py-1.5 border border-slate-700 focus:outline-none focus:border-amber-500 cursor-pointer">
+                <option value="">Jump to candidate zone...</option>
             </select>
         </div>
-
-        <!-- Utility Buttons -->
-        <div class="flex items-center space-x-2.5">
-            <button onclick="toggleSidePanel()" class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-medium text-slate-200 border border-slate-700 transition">
-                <i data-lucide="sliders" class="w-3.5 h-3.5 text-amber-400"></i> Sizing Tool
+        <div class="flex items-center gap-2">
+            <button onclick="toggleSidePanel()" class="flex items-center gap-1.5 px-2.5 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-xs text-slate-200 border border-slate-700 transition">
+                <i data-lucide="sliders" class="w-3.5 h-3.5 text-amber-400"></i> Sizing
             </button>
-            <button onclick="downloadCSV()" class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-xs font-medium text-white font-semibold shadow-sm transition">
-                <i data-lucide="download" class="w-3.5 h-3.5"></i> Export CSV
+            <button onclick="downloadCSV()" class="flex items-center gap-1.5 px-2.5 py-1.5 rounded bg-emerald-600 hover:bg-emerald-500 text-xs text-white font-medium transition">
+                <i data-lucide="download" class="w-3.5 h-3.5"></i> CSV
             </button>
         </div>
     </header>
 
-    <!-- Main Workspace -->
     <div class="relative flex-1 w-full overflow-hidden">
-        <!-- Interactive Map Container -->
         <div id="map"></div>
 
-        <!-- Floating Legend & Layer Controller (Bottom Left) -->
-        <div class="absolute bottom-6 left-6 z-20 glass-panel rounded-xl p-4 shadow-xl max-w-xs w-full text-xs">
-            <div class="flex items-center justify-between mb-2.5">
-                <h4 class="font-semibold text-slate-200 uppercase tracking-wider text-[11px]">Map Layers</h4>
-                <span class="text-[10px] text-emerald-400 font-mono">10 Ranked Sites</span>
-            </div>
-            
-            <div class="space-y-2 text-[11px] mb-3">
+        <!-- Legend (bottom-left) -->
+        <div class="absolute bottom-5 left-5 z-20 panel rounded-lg p-3.5 shadow-lg w-64 text-xs">
+            <h4 class="font-semibold text-slate-200 text-[11px] uppercase tracking-wider mb-2">Layers</h4>
+            <div class="space-y-1.5 text-[11px] mb-2.5">
                 <div class="flex items-center justify-between">
                     <span class="flex items-center gap-2 text-slate-300">
-                        <span class="w-3 h-3 rounded-full bg-emerald-500 border border-white flex items-center justify-center text-[8px] font-bold text-slate-950">★</span>
-                        Candidate Siting Zones
+                        <span class="w-4 h-3 rounded-sm" style="background:linear-gradient(90deg,#0d0887,#7e03a8,#cc4778,#f89540,#f0f921)"></span>
+                        Solar suitability (0-100)
                     </span>
-                    <span class="text-emerald-400 font-mono font-semibold">New Sites</span>
                 </div>
-                <div class="flex items-center justify-between">
-                    <span class="flex items-center gap-2 text-slate-300">
-                        <span class="w-2.5 h-2.5 rounded-full bg-sky-400"></span>
-                        Operational Mega Solar Parks
-                    </span>
-                    <span class="text-sky-400 font-mono">Bhadla/Khavda</span>
+                <div class="flex items-center gap-2 text-slate-300">
+                    <span class="w-2.5 h-2.5 rounded-full bg-emerald-500 border border-white"></span>
+                    Candidate zones (new sites)
                 </div>
-                <div class="flex items-center justify-between">
-                    <span class="flex items-center gap-2 text-slate-300">
-                        <span class="w-2.5 h-2.5 rounded-sm bg-gradient-to-r from-indigo-500 via-amber-500 to-yellow-300"></span>
-                        Solar Insolation Surface
-                    </span>
-                    <span class="text-amber-400 font-mono">Continuous</span>
+                <div class="flex items-center gap-2 text-slate-300">
+                    <span class="w-2.5 h-2.5 rounded-full bg-sky-400"></span>
+                    Operational solar parks
                 </div>
             </div>
-
-            <!-- Layer Controls -->
-            <div class="pt-2.5 border-t border-slate-800 space-y-2">
+            <div class="pt-2 border-t border-slate-800 space-y-2">
                 <div class="flex justify-between items-center text-[11px]">
-                    <span class="text-slate-400">Basemap:</span>
+                    <span class="text-slate-400">Basemap</span>
                     <div class="flex rounded bg-slate-800 p-0.5 text-[10px]">
                         <button id="btnDark" onclick="switchBasemap('dark')" class="px-2 py-0.5 rounded bg-slate-700 text-white font-medium">Dark</button>
-                        <button id="btnSat" onclick="switchBasemap('satellite')" class="px-2 py-0.5 rounded text-slate-400 hover:text-white">Satellite</button>
+                        <button id="btnSat" onclick="switchBasemap('sat')" class="px-2 py-0.5 rounded text-slate-400 hover:text-white">Satellite</button>
                     </div>
                 </div>
-
-                <!-- Surface Opacity Slider -->
                 <div>
-                    <div class="flex justify-between text-slate-400 text-[10px] mb-1">
-                        <span>Surface Opacity</span>
-                        <span id="opacityVal" class="text-slate-200 font-mono">75%</span>
+                    <div class="flex justify-between text-slate-400 text-[10px] mb-0.5">
+                        <span>Grid opacity</span>
+                        <span id="opVal" class="text-slate-200 font-mono">80%</span>
                     </div>
-                    <input id="heatOpacity" type="range" min="0" max="100" value="75" class="w-full accent-amber-400 h-1.5 bg-slate-800 rounded cursor-pointer" oninput="updateSurfaceOpacity(this.value)">
+                    <input id="opSlider" type="range" min="10" max="100" value="80"
+                        class="w-full accent-amber-400 h-1.5 bg-slate-800 rounded cursor-pointer"
+                        oninput="setGridOpacity(this.value)">
                 </div>
             </div>
         </div>
 
-        <!-- Floating Siting Feasibility Drawer (Right Side) -->
-        <div id="sidePanel" class="absolute top-4 right-4 bottom-6 z-20 glass-panel rounded-xl p-5 shadow-2xl w-96 overflow-y-auto flex flex-col justify-between transition-all duration-250 transform translate-x-0">
-            <div>
-                <div class="flex items-center justify-between pb-3 border-b border-slate-800 mb-3.5">
-                    <div>
-                        <h3 class="font-semibold text-slate-100 text-sm flex items-center gap-2">
-                            <i data-lucide="map-pin" class="w-4 h-4 text-emerald-400"></i> Site Details & Sizing
-                        </h3>
-                        <p id="siteSubtitle" class="text-[11px] text-slate-400 mt-0.5">Rank #1 Candidate Siting Zone</p>
+        <!-- Side panel (right) -->
+        <div id="sidePanel" class="absolute top-3 right-3 bottom-4 z-20 panel rounded-lg p-4 shadow-xl w-80 overflow-y-auto flex flex-col transition-transform duration-200 translate-x-0">
+            <div class="flex items-center justify-between pb-2.5 border-b border-slate-800 mb-3">
+                <h3 class="font-semibold text-slate-100 text-sm flex items-center gap-2">
+                    <i data-lucide="map-pin" class="w-4 h-4 text-emerald-400"></i>
+                    <span id="panelTitle">Site Details</span>
+                </h3>
+                <button onclick="toggleSidePanel()" class="text-slate-400 hover:text-white p-0.5 rounded hover:bg-slate-800 transition">
+                    <i data-lucide="x" class="w-4 h-4"></i>
+                </button>
+            </div>
+
+            <div class="space-y-2.5 flex-1">
+                <!-- Location header -->
+                <div class="bg-slate-800/60 rounded-lg p-2.5 border border-slate-700/50 text-xs">
+                    <div class="flex justify-between items-start mb-0.5">
+                        <h4 id="siteName" class="font-semibold text-emerald-400 text-[13px] leading-tight">Click a grid cell or zone</h4>
+                        <span id="siteBadge" class="text-[10px] font-mono font-bold bg-slate-700 text-slate-300 px-1.5 py-0.5 rounded shrink-0 ml-2">--</span>
                     </div>
-                    <button onclick="toggleSidePanel()" class="text-slate-400 hover:text-white p-1 rounded hover:bg-slate-800 transition">
-                        <i data-lucide="x" class="w-4 h-4"></i>
-                    </button>
+                    <div id="siteLocation" class="text-slate-400 text-[11px]">Select a location on the map</div>
+                    <div id="siteCoords" class="text-[10px] font-mono text-slate-500 mt-0.5"></div>
                 </div>
 
-                <!-- Selected Location Dossier -->
-                <div class="space-y-3">
-                    <div class="bg-slate-900/90 rounded-lg p-3 border border-slate-800 text-xs">
-                        <div class="flex justify-between items-start mb-1">
-                            <h4 id="siteName" class="font-semibold text-emerald-400 text-sm">Jaisalmer-Phalodi Hyper-Arid Corridor</h4>
-                            <span id="siteBadge" class="text-[10px] font-mono font-bold bg-emerald-500/20 text-emerald-300 px-1.5 py-0.5 rounded border border-emerald-500/30">RANK #1</span>
-                        </div>
-                        <div id="siteLocation" class="text-slate-300 text-[11px]">Jaisalmer / Phalodi, Rajasthan</div>
-                        <div id="siteCoords" class="text-[10px] font-mono text-slate-400 mt-0.5">26.9500° N, 70.9200° E</div>
+                <!-- Metrics grid -->
+                <div class="grid grid-cols-2 gap-1.5 text-xs">
+                    <div class="bg-slate-800/50 p-2 rounded border border-slate-700/40">
+                        <span class="text-slate-500 block text-[10px]">GHI (daily)</span>
+                        <span id="valGhi" class="text-sm font-bold text-amber-400 font-mono">--</span>
+                        <span class="text-[10px] text-slate-500 block">kWh/m2/day</span>
                     </div>
+                    <div class="bg-slate-800/50 p-2 rounded border border-slate-700/40">
+                        <span class="text-slate-500 block text-[10px]">DNI (daily)</span>
+                        <span id="valDni" class="text-sm font-bold text-orange-400 font-mono">--</span>
+                        <span class="text-[10px] text-slate-500 block">kWh/m2/day</span>
+                    </div>
+                    <div class="bg-slate-800/50 p-2 rounded border border-slate-700/40">
+                        <span class="text-slate-500 block text-[10px]">Suitability</span>
+                        <span id="valScore" class="text-sm font-bold text-emerald-400 font-mono">--</span>
+                        <span class="text-[10px] text-slate-500 block">/ 100</span>
+                    </div>
+                    <div class="bg-slate-800/50 p-2 rounded border border-slate-700/40">
+                        <span class="text-slate-500 block text-[10px]">Avg. Temp</span>
+                        <span id="valTemp" class="text-sm font-bold text-sky-400 font-mono">--</span>
+                        <span class="text-[10px] text-slate-500 block">deg C</span>
+                    </div>
+                </div>
 
-                    <!-- Key Technical Metrics -->
-                    <div class="grid grid-cols-2 gap-2 text-xs">
-                        <div class="bg-slate-900/70 p-2.5 rounded-lg border border-slate-800">
-                            <span class="text-slate-400 block text-[10px] uppercase">Daily GHI</span>
-                            <span id="valGhi" class="text-base font-bold text-amber-400 font-mono">6.35</span>
-                            <span class="text-[10px] text-slate-500 block">kWh/m²/day</span>
+                <!-- Tier & extra info -->
+                <div class="bg-slate-800/60 rounded-lg p-2.5 border border-slate-700/50 text-xs space-y-1.5">
+                    <div class="flex justify-between items-center">
+                        <span class="text-slate-400">Tier:</span>
+                        <span id="valTier" class="font-mono text-slate-200 text-[11px]">--</span>
+                    </div>
+                    <div id="extraInfo" class="hidden space-y-1.5">
+                        <div class="flex justify-between items-center">
+                            <span class="text-slate-400">Terrain slope:</span>
+                            <span id="valSlope" class="font-mono text-slate-200">--</span>
                         </div>
-                        <div class="bg-slate-900/70 p-2.5 rounded-lg border border-slate-800">
-                            <span class="text-slate-400 block text-[10px] uppercase">Potential Capacity</span>
-                            <span id="valCapacity" class="text-base font-bold text-emerald-400 font-mono">8,000 MW</span>
-                            <span id="valArea" class="text-[10px] text-slate-500 block">~35,000 Acres</span>
+                        <div class="flex justify-between items-center">
+                            <span class="text-slate-400">Land type:</span>
+                            <span id="valLand" class="text-right text-slate-300 text-[11px] max-w-[55%]">--</span>
+                        </div>
+                        <div>
+                            <span class="text-slate-400 block text-[10px]">Grid substation:</span>
+                            <span id="valSub" class="text-slate-200 text-[11px]">--</span>
+                        </div>
+                        <div class="flex justify-between items-center">
+                            <span class="text-slate-400">Est. LCOE:</span>
+                            <span id="valLcoe" class="font-mono font-semibold text-emerald-400">--</span>
+                        </div>
+                        <div>
+                            <span class="text-slate-400 block text-[10px] mb-0.5">Advantages:</span>
+                            <p id="valAdv" class="text-slate-300 text-[11px] leading-relaxed"></p>
                         </div>
                     </div>
+                </div>
 
-                    <!-- Detailed Siting Parameters -->
-                    <div class="bg-slate-900/80 rounded-lg p-3 border border-slate-800 text-xs space-y-2">
-                        <h5 class="font-semibold text-slate-300 text-[10px] uppercase tracking-wider">Geospatial & Grid Readiness</h5>
-                        
-                        <div class="flex justify-between items-center py-0.5 border-b border-slate-800/60">
-                            <span class="text-slate-400">Terrain Slope:</span>
-                            <span id="valSlope" class="font-mono text-slate-200">0.8 % (Ultra-flat)</span>
-                        </div>
-                        <div class="flex justify-between items-center py-0.5 border-b border-slate-800/60">
-                            <span class="text-slate-400">Land Category:</span>
-                            <span id="valLand" class="text-right text-slate-300 text-[11px]">Barren Sandy Desert</span>
-                        </div>
-                        <div class="py-0.5 border-b border-slate-800/60">
-                            <span class="text-slate-400 block text-[10px]">Nearest ISTS Substation:</span>
-                            <span id="valSubstation" class="text-slate-200 font-medium text-[11px]">765/400 kV Fatehgarh-II ISTS (18 km)</span>
-                        </div>
-                        <div class="flex justify-between items-center py-0.5 border-b border-slate-800/60">
-                            <span class="text-slate-400">Estimated LCOE:</span>
-                            <span id="valLcoe" class="font-mono font-semibold text-emerald-400">₹ 2.35 / kWh</span>
-                        </div>
-                        <div class="py-0.5">
-                            <span class="text-slate-400 block text-[10px] mb-0.5">Key Site Advantages:</span>
-                            <p id="valAdvantages" class="text-slate-300 text-[11px] leading-relaxed italic">Highest GHI in South Asia (>325 sunny days), zero agricultural conflict, direct access to Green Energy Corridor.</p>
-                        </div>
+                <!-- Sizing calculator -->
+                <div class="pt-1">
+                    <div class="flex justify-between items-center mb-1">
+                        <label class="text-xs font-medium text-slate-200">Land area</label>
+                        <span id="landVal" class="text-xs font-mono font-semibold text-amber-400">500 Acres</span>
                     </div>
-
-                    <!-- Custom Sizing Calculator -->
-                    <div class="pt-1">
-                        <div class="flex justify-between items-center mb-1">
-                            <label class="text-xs font-medium text-slate-200">Test Custom Land Area</label>
-                            <span id="landAreaDisplay" class="text-xs font-mono font-semibold text-amber-400">500 Acres</span>
-                        </div>
-                        <input id="landAreaSlider" type="range" min="10" max="5000" step="25" value="500" class="w-full accent-amber-400 h-1.5 bg-slate-800 rounded cursor-pointer" oninput="calculateCustomYield(this.value)">
-                        <div class="bg-slate-900/90 rounded-lg p-2.5 border border-slate-800 text-[11px] mt-1.5 grid grid-cols-2 gap-1.5 font-mono">
-                            <div>Capacity: <span id="customMw" class="text-white font-bold">111 MW</span></div>
-                            <div>Gen: <span id="customGen" class="text-amber-400 font-bold">201 GWh/yr</span></div>
-                            <div>Revenue: <span id="customRev" class="text-emerald-400 font-bold">₹ 52.3 Cr</span></div>
-                            <div>CO₂: <span id="customCo2" class="text-emerald-300 font-bold">165k T</span></div>
-                        </div>
+                    <input id="landSlider" type="range" min="10" max="5000" step="25" value="500"
+                        class="w-full accent-amber-400 h-1.5 bg-slate-800 rounded cursor-pointer" oninput="calcYield(this.value)">
+                    <div class="bg-slate-800/60 rounded p-2 border border-slate-700/40 text-[11px] mt-1.5 grid grid-cols-2 gap-1 font-mono">
+                        <div>Capacity: <span id="cMw" class="text-white font-bold">111 MW</span></div>
+                        <div>Gen: <span id="cGen" class="text-amber-400 font-bold">201 GWh</span></div>
+                        <div>Revenue: <span id="cRev" class="text-emerald-400 font-bold">52.3 Cr</span></div>
+                        <div>CO2: <span id="cCo2" class="text-emerald-300 font-bold">165k T</span></div>
                     </div>
                 </div>
             </div>
 
-            <!-- Engineering footer note -->
-            <div class="mt-3.5 pt-2.5 border-t border-slate-800 text-[10px] text-slate-500 flex items-center gap-1.5">
-                <i data-lucide="check-circle" class="w-3.5 h-3.5 text-emerald-400 shrink-0"></i>
-                <span>Click any candidate zone star or click anywhere on India to inspect local siting metrics.</span>
+            <div class="mt-2.5 pt-2 border-t border-slate-800 text-[10px] text-slate-500">
+                Click any grid cell or candidate marker to inspect.
             </div>
         </div>
     </div>
 
-    <!-- Data Injection & Map Engine -->
     <script>
-        const CANDIDATE_ZONES = """ + json.dumps(candidate_zones_data) + """;
-        const MEGA_PARKS = """ + json.dumps(parks_data) + """;
-        const SURFACE_BOUNDS = """ + json.dumps(bounds_json) + """;
-        const SURFACE_PNG = "solar_suitability_surface.png";
-        const INDIA_GEOJSON = """ + geojson_str + """;
+        const GRID = """ + json.dumps(grid_rows) + """;
+        const STEP = """ + str(grid_step) + """;
+        const CANDIDATES = """ + json.dumps(candidate_zones_data) + """;
+        const PARKS = """ + json.dumps(parks_data) + """;
+        const BOUNDARY = """ + geojson_str + """;
 
-        let map, surfaceOverlay, candidateLayer, parksLayer, geojsonLayer;
-        let darkTiles, satelliteTiles;
-        let currentGhi = 6.35;
+        let map, gridLayer, darkTiles, satTiles;
+        let currentGhi = 5.0;
+        let gridOpacity = 0.80;
+
+        // Plasma colormap (matches matplotlib plasma)
+        function scoreColor(s) {
+            const stops = [
+                [0,   13,  8, 135],
+                [20,  84,  2, 163],
+                [35, 139, 10, 165],
+                [50, 185, 50, 137],
+                [62, 219, 92, 104],
+                [72, 244,136,  73],
+                [82, 254,188,  43],
+                [92, 240,230,  33],
+                [100,240,249,  33]
+            ];
+            s = Math.max(0, Math.min(100, s));
+            let lo = stops[0], hi = stops[stops.length-1];
+            for (let i = 0; i < stops.length - 1; i++) {
+                if (s >= stops[i][0] && s <= stops[i+1][0]) {
+                    lo = stops[i]; hi = stops[i+1]; break;
+                }
+            }
+            const t = (hi[0] === lo[0]) ? 0 : (s - lo[0]) / (hi[0] - lo[0]);
+            const r = Math.round(lo[1] + t * (hi[1] - lo[1]));
+            const g = Math.round(lo[2] + t * (hi[2] - lo[2]));
+            const b = Math.round(lo[3] + t * (hi[3] - lo[3]));
+            return `rgb(${r},${g},${b})`;
+        }
 
         function initMap() {
             map = L.map('map', {
-                center: [23.5, 78.5],
+                center: [22.5, 79.0],
                 zoom: 5,
                 minZoom: 4,
-                maxZoom: 17,
+                maxZoom: 18,
+                preferCanvas: true,
                 zoomControl: false
             });
-
             L.control.zoom({ position: 'topleft' }).addTo(map);
 
-            // Dark Matter Basemap
             darkTiles = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
                 attribution: '&copy; OpenStreetMap &copy; CARTO',
-                subdomains: 'abcd',
-                maxZoom: 19
+                subdomains: 'abcd', maxZoom: 19
             }).addTo(map);
 
-            // High-Resolution Esri Satellite Imagery
-            satelliteTiles = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
-                attribution: '&copy; Esri World Imagery'
+            satTiles = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+                attribution: '&copy; Esri'
             });
 
-            // 1. Continuous Seamless Interpolated Solar Surface Overlay (Zero Dots!)
-            surfaceOverlay = L.imageOverlay(SURFACE_PNG + '?v=' + Date.now(), SURFACE_BOUNDS, {
-                opacity: 0.75,
-                interactive: false,
-                crossOrigin: true,
-                zIndex: 5
+            // Boundary outline
+            L.geoJSON(BOUNDARY, {
+                style: { color: '#94a3b8', weight: 1.0, fillOpacity: 0, interactive: false }
             }).addTo(map);
 
-            // 2. Official Survey of India Boundary
-            geojsonLayer = L.geoJSON(INDIA_GEOJSON, {
-                style: {
-                    color: '#94a3b8',
-                    weight: 1.2,
-                    fillOpacity: 0.0,
-                    interactive: false
-                }
-            }).addTo(map);
+            // Vector grid cells
+            gridLayer = L.layerGroup().addTo(map);
+            const half = STEP / 2;
+            GRID.forEach(pt => {
+                const rect = L.rectangle(
+                    [[pt.la - half, pt.lo - half], [pt.la + half, pt.lo + half]],
+                    {
+                        color: scoreColor(pt.s),
+                        fillColor: scoreColor(pt.s),
+                        fillOpacity: gridOpacity,
+                        weight: 0.3,
+                        opacity: 0.4
+                    }
+                );
+                rect._ptData = pt;
+                rect.on('click', function() { showCellInfo(this._ptData); });
+                gridLayer.addLayer(rect);
+            });
 
-            // 3. Ranked Candidate Siting Zones Layer
-            candidateLayer = L.layerGroup().addTo(map);
-            const selectEl = document.getElementById('siteSelect');
-
-            CANDIDATE_ZONES.forEach((zone, idx) => {
-                // Populate Dropdown
+            // Candidate zones
+            const selEl = document.getElementById('siteSelect');
+            CANDIDATES.forEach((z, i) => {
                 const opt = document.createElement('option');
-                opt.value = idx;
-                opt.innerText = `#${zone.rank} - ${zone.name} (${zone.capacity_mw.toLocaleString()} MW)`;
-                selectEl.appendChild(opt);
+                opt.value = i;
+                opt.innerText = '#' + z.rank + ' ' + z.name + ' (' + z.capacity_mw.toLocaleString() + ' MW)';
+                selEl.appendChild(opt);
 
-                // Add Candidate Marker (Green Star / Highlight Ring)
-                const marker = L.circleMarker([zone.lat, zone.lon], {
-                    radius: 12,
-                    fillColor: '#10b981',
-                    color: '#ffffff',
-                    weight: 2.5,
-                    opacity: 1,
-                    fillOpacity: 0.95
+                const m = L.circleMarker([z.lat, z.lon], {
+                    radius: 10, fillColor: '#10b981', color: '#fff',
+                    weight: 2.5, fillOpacity: 0.95
                 });
-
-                const popupContent = `
-                    <div class="p-2 custom-popup text-xs space-y-1.5">
-                        <div class="flex items-center justify-between gap-2">
-                            <span class="font-bold text-emerald-400 text-sm">#${zone.rank} ${zone.name}</span>
-                            <span class="text-[10px] font-mono bg-emerald-500/20 text-emerald-300 px-1.5 py-0.5 rounded font-bold">${zone.capacity_mw.toLocaleString()} MW</span>
-                        </div>
-                        <div class="text-slate-300"><strong>Location:</strong> ${zone.district}, ${zone.state}</div>
-                        <div class="text-slate-300"><strong>Daily GHI:</strong> ${zone.ghi} kWh/m²/day | <strong>DNI:</strong> ${zone.dni}</div>
-                        <div class="text-slate-300"><strong>Terrain:</strong> ${zone.slope}% slope (${zone.land_type})</div>
-                        <div class="text-slate-300"><strong>ISTS Grid:</strong> ${zone.substation} (${zone.grid_dist_km} km)</div>
-                        <div class="text-slate-300"><strong>Est. LCOE:</strong> ₹${zone.lcoe}/kWh</div>
-                        <p class="text-slate-400 text-[11px] mt-1 italic border-t border-slate-800 pt-1">${zone.advantages}</p>
-                    </div>
-                `;
-                marker.bindPopup(popupContent);
-                marker.on('click', () => {
-                    displayCandidateDossier(zone);
-                });
-                candidateLayer.addLayer(marker);
+                m.bindPopup('<div class="custom-popup text-xs p-1.5"><b class="text-emerald-400">#' + z.rank + ' ' + z.name + '</b><br>' + z.district + ', ' + z.state + '<br>GHI: ' + z.ghi + ' | Score: ' + z.score + '</div>');
+                m.on('click', function() { showZoneInfo(z); });
+                m.addTo(map);
             });
 
-            // 4. Operational Mega Solar Parks Layer (Blue Markers)
-            parksLayer = L.layerGroup().addTo(map);
-            MEGA_PARKS.forEach(park => {
-                const marker = L.circleMarker([park.lat, park.lon], {
-                    radius: Math.max(5, Math.min(13, park.capacity / 250)),
-                    fillColor: '#38bdf8',
-                    color: '#ffffff',
-                    weight: 1.5,
-                    opacity: 1,
-                    fillOpacity: 0.8
+            // Existing parks
+            PARKS.forEach(p => {
+                const m = L.circleMarker([p.lat, p.lon], {
+                    radius: Math.max(4, Math.min(11, p.capacity / 300)),
+                    fillColor: '#38bdf8', color: '#fff',
+                    weight: 1.2, fillOpacity: 0.85
                 });
-
-                const popupContent = `
-                    <div class="p-2 custom-popup text-xs space-y-1.5">
-                        <div class="font-semibold text-sky-400 text-sm flex items-center justify-between">
-                            <span>${park.name}</span>
-                            <span class="text-[10px] font-mono bg-sky-500/20 text-sky-300 px-1.5 py-0.5 rounded">${park.capacity.toLocaleString()} MW</span>
-                        </div>
-                        <div class="text-slate-300"><strong>State:</strong> ${park.state} | <strong>Status:</strong> ${park.status}</div>
-                        <div class="text-slate-300"><strong>Developer:</strong> ${park.developer}</div>
-                        <div class="text-slate-400 text-[11px]"><strong>Substation:</strong> ${park.substation || 'Grid Substation'}</div>
-                    </div>
-                `;
-                marker.bindPopup(popupContent);
-                parksLayer.addLayer(marker);
+                m.bindPopup('<div class="custom-popup text-xs p-1.5"><b class="text-sky-400">' + p.name + '</b><br>' + p.state + ' | ' + p.capacity.toLocaleString() + ' MW | ' + p.status + '</div>');
+                m.addTo(map);
             });
-
-            // 5. Map Click Custom Inspector
-            map.on('click', (e) => {
-                const lat = e.latlng.lat;
-                const lon = e.latlng.lng;
-                selectCustomPoint(lat, lon);
-            });
-
-            // Default display Rank #1
-            displayCandidateDossier(CANDIDATE_ZONES[0]);
         }
 
-        function displayCandidateDossier(zone) {
-            currentGhi = zone.ghi;
-            document.getElementById('siteSubtitle').innerText = `Rank #${zone.rank} Candidate Siting Zone`;
-            document.getElementById('siteName').innerText = zone.name;
-            document.getElementById('siteBadge').innerText = `RANK #${zone.rank}`;
-            document.getElementById('siteLocation').innerText = `${zone.district}, ${zone.state}`;
-            document.getElementById('siteCoords').innerText = `${zone.lat.toFixed(4)}° N, ${zone.lon.toFixed(4)}° E`;
-            document.getElementById('valGhi').innerText = zone.ghi.toFixed(2);
-            document.getElementById('valCapacity').innerText = `${zone.capacity_mw.toLocaleString()} MW`;
-            document.getElementById('valArea').innerText = `~${zone.area_acres.toLocaleString()} Acres`;
-            document.getElementById('valSlope').innerText = `${zone.slope} % (${zone.slope < 1.5 ? 'Ultra-flat' : 'Gentle slope'})`;
-            document.getElementById('valLand').innerText = zone.land_type;
-            document.getElementById('valSubstation').innerText = `${zone.substation} (${zone.grid_dist_km} km)`;
-            document.getElementById('valLcoe').innerText = `₹ ${zone.lcoe.toFixed(2)} / kWh`;
-            document.getElementById('valAdvantages').innerText = zone.advantages;
+        function showCellInfo(pt) {
+            currentGhi = pt.g;
+            document.getElementById('panelTitle').innerText = 'Grid Cell';
+            document.getElementById('siteName').innerText = 'Grid Cell (' + pt.la.toFixed(2) + ', ' + pt.lo.toFixed(2) + ')';
+            document.getElementById('siteBadge').innerText = pt.ti.replace('Tier ', 'T').split(' -')[0];
+            document.getElementById('siteBadge').className = 'text-[10px] font-mono font-bold px-1.5 py-0.5 rounded shrink-0 ml-2 ' +
+                (pt.s >= 85 ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' :
+                 pt.s >= 70 ? 'bg-sky-500/20 text-sky-300 border border-sky-500/30' :
+                 pt.s >= 50 ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30' :
+                              'bg-slate-700 text-slate-400 border border-slate-600');
+            document.getElementById('siteLocation').innerText = pt.ti;
+            document.getElementById('siteCoords').innerText = pt.la.toFixed(4) + ' N, ' + pt.lo.toFixed(4) + ' E';
+            document.getElementById('valGhi').innerText = pt.g.toFixed(2);
+            document.getElementById('valDni').innerText = pt.d.toFixed(2);
+            document.getElementById('valScore').innerText = pt.s.toFixed(1);
+            document.getElementById('valTemp').innerText = pt.t.toFixed(1);
+            document.getElementById('valTier').innerText = pt.ti;
+            document.getElementById('extraInfo').classList.add('hidden');
+            calcYield(document.getElementById('landSlider').value);
 
-            calculateCustomYield(document.getElementById('landAreaSlider').value);
+            // Open panel if closed
+            const panel = document.getElementById('sidePanel');
+            if (panel.classList.contains('translate-x-full')) toggleSidePanel();
         }
 
-        function selectCustomPoint(lat, lon) {
-            // Approximation for custom clicked point
-            let estGhi = 5.2 - 0.04 * Math.abs(lat - 22.0);
-            if (lon >= 69.0 && lon <= 76.0 && lat >= 23.0 && lat <= 29.5) estGhi += 1.0;
-            else if (lon >= 74.0 && lon <= 79.0 && lat >= 11.0 && lat <= 18.0) estGhi += 0.45;
-            estGhi = Math.max(3.0, Math.min(6.5, estGhi));
-            currentGhi = estGhi;
+        function showZoneInfo(z) {
+            currentGhi = z.ghi;
+            document.getElementById('panelTitle').innerText = 'Candidate Zone';
+            document.getElementById('siteName').innerText = z.name;
+            document.getElementById('siteBadge').innerText = '#' + z.rank;
+            document.getElementById('siteBadge').className = 'text-[10px] font-mono font-bold bg-emerald-500/20 text-emerald-300 px-1.5 py-0.5 rounded border border-emerald-500/30 shrink-0 ml-2';
+            document.getElementById('siteLocation').innerText = z.district + ', ' + z.state;
+            document.getElementById('siteCoords').innerText = z.lat.toFixed(4) + ' N, ' + z.lon.toFixed(4) + ' E | ' + z.capacity_mw.toLocaleString() + ' MW / ' + z.area_acres.toLocaleString() + ' acres';
+            document.getElementById('valGhi').innerText = z.ghi.toFixed(2);
+            document.getElementById('valDni').innerText = z.dni.toFixed(2);
+            document.getElementById('valScore').innerText = z.score.toFixed(1);
+            document.getElementById('valTemp').innerText = '--';
+            document.getElementById('valTier').innerText = 'Tier 1 - Prime';
+            document.getElementById('valSlope').innerText = z.slope + '%';
+            document.getElementById('valLand').innerText = z.land_type;
+            document.getElementById('valSub').innerText = z.substation + ' (' + z.grid_dist_km + ' km)';
+            document.getElementById('valLcoe').innerText = 'Rs ' + z.lcoe.toFixed(2) + '/kWh';
+            document.getElementById('valAdv').innerText = z.advantages;
+            document.getElementById('extraInfo').classList.remove('hidden');
+            calcYield(document.getElementById('landSlider').value);
 
-            document.getElementById('siteSubtitle').innerText = "Custom Investigated Site";
-            document.getElementById('siteName').innerText = "Custom Siting Investigation";
-            document.getElementById('siteBadge').innerText = "CUSTOM";
-            document.getElementById('siteLocation').innerText = `Lat ${lat.toFixed(2)}°, Lon ${lon.toFixed(2)}°`;
-            document.getElementById('siteCoords').innerText = `${lat.toFixed(4)}° N, ${lon.toFixed(4)}° E`;
-            document.getElementById('valGhi').innerText = estGhi.toFixed(2);
-            document.getElementById('valCapacity').innerText = "Variable";
-            document.getElementById('valArea').innerText = "User Defined";
-            document.getElementById('valSlope').innerText = lat > 32.0 ? "> 5% (Mountainous)" : "< 2% (Plains)";
-            document.getElementById('valLand').innerText = "Custom Land Siting";
-            document.getElementById('valSubstation').innerText = "Local DISCOM / PGCIL Substation";
-            document.getElementById('valLcoe').innerText = `₹ ${(2.80 - (estGhi - 4.5)*0.2).toFixed(2)} / kWh`;
-            document.getElementById('valAdvantages').innerText = "Site evaluated based on localized solar insolation and terrain gradients.";
-
-            calculateCustomYield(document.getElementById('landAreaSlider').value);
+            const panel = document.getElementById('sidePanel');
+            if (panel.classList.contains('translate-x-full')) toggleSidePanel();
         }
 
         function zoomToCandidate(idx) {
-            if (idx === "" || idx === null) return;
-            const zone = CANDIDATE_ZONES[parseInt(idx)];
-            map.flyTo([zone.lat, zone.lon], 9, { duration: 1.5 });
-            displayCandidateDossier(zone);
+            if (idx === '' || idx === null) return;
+            const z = CANDIDATES[parseInt(idx)];
+            map.flyTo([z.lat, z.lon], 8, { duration: 1.2 });
+            showZoneInfo(z);
         }
 
-        function calculateCustomYield(landAcres) {
-            document.getElementById('landAreaDisplay').innerText = `${landAcres} Acres`;
-
-            const mw = (landAcres / 4.5);
-            const kw = mw * 1000;
-            const annualGhi = currentGhi * 365;
-            const specificYield = annualGhi * 0.78;
-            const genKwh = kw * specificYield;
-            const genGwh = genKwh / 1000000;
-            const revCr = (genKwh * 2.60) / 10000000;
-            const co2Tonnes = (genKwh * 0.82) / 1000;
-
-            document.getElementById('customMw').innerText = `${mw.toFixed(0)} MW`;
-            document.getElementById('customGen').innerText = `${genGwh.toFixed(1)} GWh/yr`;
-            document.getElementById('customRev').innerText = `₹ ${revCr.toFixed(1)} Cr`;
-            document.getElementById('customCo2').innerText = `${Math.round(co2Tonnes / 1000)}k T`;
+        function calcYield(acres) {
+            document.getElementById('landVal').innerText = acres + ' Acres';
+            const mw = acres / 4.5;
+            const genGwh = mw * currentGhi * 365 * 0.78 / 1000;
+            const revCr = genGwh * 1000000 * 2.60 / 10000000;
+            const co2k = genGwh * 1000000 * 0.82 / 1000000;
+            document.getElementById('cMw').innerText = mw.toFixed(0) + ' MW';
+            document.getElementById('cGen').innerText = genGwh.toFixed(1) + ' GWh';
+            document.getElementById('cRev').innerText = revCr.toFixed(1) + ' Cr';
+            document.getElementById('cCo2').innerText = co2k.toFixed(0) + 'k T';
         }
 
-        function updateSurfaceOpacity(val) {
-            document.getElementById('opacityVal').innerText = `${val}%`;
-            if (surfaceOverlay) {
-                surfaceOverlay.setOpacity(val / 100.0);
-            }
+        function setGridOpacity(val) {
+            gridOpacity = val / 100;
+            document.getElementById('opVal').innerText = val + '%';
+            gridLayer.eachLayer(function(layer) {
+                layer.setStyle({ fillOpacity: gridOpacity });
+            });
         }
 
         function switchBasemap(mode) {
-            if (mode === 'satellite') {
-                map.removeLayer(darkTiles);
-                map.addLayer(satelliteTiles);
-                document.getElementById('btnSat').className = "px-2 py-0.5 rounded bg-slate-700 text-white font-medium";
-                document.getElementById('btnDark').className = "px-2 py-0.5 rounded text-slate-400 hover:text-white";
+            if (mode === 'sat') {
+                map.removeLayer(darkTiles); map.addLayer(satTiles);
+                document.getElementById('btnSat').className = 'px-2 py-0.5 rounded bg-slate-700 text-white font-medium';
+                document.getElementById('btnDark').className = 'px-2 py-0.5 rounded text-slate-400 hover:text-white';
             } else {
-                map.removeLayer(satelliteTiles);
-                map.addLayer(darkTiles);
-                document.getElementById('btnDark').className = "px-2 py-0.5 rounded bg-slate-700 text-white font-medium";
-                document.getElementById('btnSat').className = "px-2 py-0.5 rounded text-slate-400 hover:text-white";
+                map.removeLayer(satTiles); map.addLayer(darkTiles);
+                document.getElementById('btnDark').className = 'px-2 py-0.5 rounded bg-slate-700 text-white font-medium';
+                document.getElementById('btnSat').className = 'px-2 py-0.5 rounded text-slate-400 hover:text-white';
             }
         }
 
         function toggleSidePanel() {
-            const panel = document.getElementById('sidePanel');
-            panel.classList.toggle('translate-x-full');
-            panel.classList.toggle('translate-x-0');
+            const p = document.getElementById('sidePanel');
+            p.classList.toggle('translate-x-full');
+            p.classList.toggle('translate-x-0');
         }
 
         function downloadCSV() {
-            let csv = "rank,name,district,state,latitude,longitude,potential_capacity_mw,area_acres,ghi_daily,dni_daily,suitability_score,terrain_slope_pct,land_type,nearest_substation,substation_distance_km,lcoe_inr_kwh\\n";
-            CANDIDATE_ZONES.forEach(z => {
-                csv += `${z.rank},"${z.name}","${z.district}","${z.state}",${z.lat},${z.lon},${z.capacity_mw},${z.area_acres},${z.ghi},${z.dni},${z.score},${z.slope},"${z.land_type}","${z.substation}",${z.grid_dist_km},${z.lcoe}\\n`;
+            let csv = 'rank,name,district,state,lat,lon,capacity_mw,area_acres,ghi,dni,score,slope,land_type,substation,grid_km,lcoe\\n';
+            CANDIDATES.forEach(z => {
+                csv += z.rank + ',"' + z.name + '","' + z.district + '","' + z.state + '",' + z.lat + ',' + z.lon + ',' + z.capacity_mw + ',' + z.area_acres + ',' + z.ghi + ',' + z.dni + ',' + z.score + ',' + z.slope + ',"' + z.land_type + '","' + z.substation + '",' + z.grid_dist_km + ',' + z.lcoe + '\\n';
             });
-            const blob = new Blob([csv], { type: 'text/csv' });
-            const url = window.URL.createObjectURL(blob);
             const a = document.createElement('a');
-            a.setAttribute('href', url);
-            a.setAttribute('download', 'india_candidate_solar_parks_raydium.csv');
+            a.href = URL.createObjectURL(new Blob([csv], {type:'text/csv'}));
+            a.download = 'raydium_candidate_solar_sites.csv';
             a.click();
         }
 
-        window.onload = () => {
+        window.onload = function() {
             initMap();
             lucide.createIcons();
-            calculateCustomYield(500);
+            calcYield(500);
         };
     </script>
 </body>
@@ -786,5 +731,7 @@ class MapVisualizer:
         with open(output_html, "w", encoding="utf-8") as f:
             f.write(html_template)
 
-        logger.info(f"Dashboard generated successfully at {output_html}")
+        file_size_kb = os.path.getsize(output_html) / 1024
+        logger.info(f"Dashboard generated: {output_html} ({file_size_kb:.1f} KB, {len(grid_rows)} grid cells)")
         return output_html
+

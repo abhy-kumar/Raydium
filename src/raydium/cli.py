@@ -126,11 +126,11 @@ def visualize(
     visualizer = MapVisualizer(geojson_path=geojson)
     visualizer.render_static_map(raster_dict, output_image=image_out, dpi=dpi)
 
-    console.print("[bold cyan]Generating modern interactive web dashboard...[/bold cyan]")
-    visualizer.render_interactive_dashboard(df, raster_dict, output_html=html_out)
+    console.print("[bold cyan]Generating interactive web dashboard...[/bold cyan]")
+    visualizer.render_interactive_dashboard(df, output_html=html_out)
     
     # Also save copy to india_solar_potential.html for legacy compatibility
-    visualizer.render_interactive_dashboard(df, raster_dict, output_html="india_solar_potential.html")
+    visualizer.render_interactive_dashboard(df, output_html="india_solar_potential.html")
 
     console.print(f"[bold green][OK] High-res Map created: {image_out}[/bold green]")
     console.print(f"[bold green][OK] Interactive Dashboard created: {html_out} and india_solar_potential.html[/bold green]")
@@ -230,8 +230,8 @@ def pipeline(
 
     visualizer = MapVisualizer(geojson_path=geojson)
     visualizer.render_static_map(raster_dict, output_image=output_png)
-    visualizer.render_interactive_dashboard(df, raster_dict, output_html=output_html)
-    visualizer.render_interactive_dashboard(df, raster_dict, output_html="india_solar_potential.html")
+    visualizer.render_interactive_dashboard(df, output_html=output_html)
+    visualizer.render_interactive_dashboard(df, output_html="india_solar_potential.html")
     console.print(f"[green][OK] Stage 2 Complete: High-res PNG ({output_png}) and Interactive Dashboard ({output_html}) created[/green]")
 
     # 3. Analyze
